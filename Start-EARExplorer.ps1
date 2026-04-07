@@ -2,7 +2,7 @@
 $Port              = 3000
 $Database          = 'EAR'
 $IndexHtml         = Join-Path $PSScriptRoot 'public\index.html'
-$AllowedServers    = @('ArcadiaWHJSqlStage','BrandonRhjSqlDev')
+$AllowedServers    = @('ArcadiaWHJSqlStage','RetailRHjsqldev','RetailRHjsqlStage')
 $script:CurrentServer = 'ArcadiaWHJSqlStage'   # updated per-request
 
 # Raw query helper — returns an array of hashtables (no JSON conversion)
