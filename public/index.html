@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>HighJump EAR Explorer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif;
+         background: linear-gradient(135deg, #ede9fe 0%, #dbeafe 100%);
+         background-attachment: fixed; color: #0f172a; min-height: 100vh; }
+
+  header { background: #ffffff; padding: 10px 24px; border-bottom: 3px solid #7c3aed;
+           display: flex; align-items: center; gap: 12px;
+           box-shadow: 0 2px 8px rgba(124,58,237,0.10); flex-wrap: nowrap; }
+  header h1 { font-size: 1.2rem; color: #7c3aed; white-space: nowrap; margin-right: 8px; }
+  header input, header select {
+    background: #f5f3ff; border: 1.5px solid #c4b5fd; color: #1e1b4b;
+    padding: 5px 10px; border-radius: 6px; font-size: 0.88rem; outline: none; height: 32px; }
+  header input:focus, header select:focus { border-color: #7c3aed; box-shadow: 0 0 0 2px rgba(124,58,237,0.18); }
+  header button {
+    background: #7c3aed; color: #ffffff; border: none; padding: 5px 14px;
+    border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 0.88rem; height: 32px; }
+  header button:hover { background: #6d28d9; }
+  #btn-back { background: #ede9fe; color: #6d28d9; display: none; border: none; }
+  #btn-back:hover { background: #ddd6fe; }
+
+
+
+
+  /* Process list view */
+  .proc-list { padding: 16px 24px; }
+  .proc-list-item { display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+                    background: #ffffff; border: none; border-left: 4px solid #7c3aed;
+                    border-radius: 8px; margin-bottom: 8px; cursor: pointer;
+                    transition: transform 0.1s, box-shadow 0.1s;
+                    box-shadow: 0 2px 8px rgba(124,58,237,0.10); }
+  .proc-list-item:hover { transform: translateX(3px); box-shadow: 0 4px 16px rgba(124,58,237,0.22); }
+  .proc-list-icon { font-size: 1.1rem; }
+  .proc-list-name { font-weight: 600; color: #000000; font-size: 0.95rem; }
+  .proc-list-desc { font-size: 0.8rem; color: #000000; margin-top: 2px; }
+  .proc-list-version { margin-left: auto; font-size: 0.75rem; color: #000000;
+                       background: #ede9fe; border-radius: 4px; padding: 2px 8px; font-weight: 600; }
+
+  .grid-wrap { overflow: auto; padding: 16px 24px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem;
+          background: #ffffff; border-radius: 10px; overflow: hidden;
+          box-shadow: 0 4px 20px rgba(67,56,202,0.12); }
+  thead th { background: linear-gradient(90deg, #6d28d9 0%, #4338ca 100%); color: #ffffff;
+             padding: 9px 12px; text-align: left; position: sticky; top: 0;
+             white-space: nowrap; border-bottom: 2px solid #5b21b6;
+             cursor: pointer; user-select: none; }
+  thead th:hover { background: linear-gradient(90deg, #7c3aed 0%, #4f46e5 100%); }
+  tbody tr { border-bottom: 1px solid rgba(0,0,0,0.06); cursor: pointer; transition: filter 0.1s; }
+  tbody tr:hover { filter: brightness(0.90); }
+  tbody tr.commented { font-style: italic; }
+  tbody tr.selected { outline: 3px solid #7c3aed; outline-offset: -1px; }
+  tbody td { padding: 7px 12px; white-space: nowrap; max-width: 320px;
+             overflow: hidden; text-overflow: ellipsis; color: #000000; }
+  td.seq  { width: 48px; text-align: center; font-weight: 700; color: #000000;
+            background: rgba(255,255,255,0.55); border-radius: 4px; }
+  td.label-col { width: 90px; font-weight: 700; color: #000000; }
+  td.pass { color: #000000; font-weight: 700; }
+  td.fail { color: #000000; font-weight: 700; }
+  .label-link { cursor: pointer; text-decoration: underline dotted #6d28d9; font-weight: 700; color: #000000; }
+  .label-link:hover { text-decoration-style: solid; background: rgba(109,40,217,0.08); border-radius: 3px; }
+  @keyframes jumpFlash {
+    0%   { outline: none; }
+    10%  { outline: 3px solid #f59e0b; outline-offset: -1px; }
+    80%  { outline: 3px solid #f59e0b; outline-offset: -1px; }
+    100% { outline: none; }
+  }
+  tr.jump-highlight { animation: jumpFlash 1.5s ease-out; }
+
+  /* Process group header row */
+  tr.group-header td { background: #6d28d9; color: #ffffff; font-weight: 700;
+                       font-size: 0.9rem; padding: 8px 12px; letter-spacing: 0.03em;
+                       cursor: pointer; border-top: 3px solid #5b21b6; user-select: none; }
+  tr.group-header:hover td { background: #7c3aed; }
+  tr.group-header .proc-badge { display: inline-block; background: rgba(255,255,255,0.22);
+                                 border-radius: 4px; padding: 1px 8px; margin-left: 8px;
+                                 font-size: 0.75rem; font-weight: 500; }
+  tr.group-header .toggle-icon { margin-right: 8px; font-style: normal; }
+  tr.detail-row { display: none; } /* collapsed by default */
+  tr.drillable     td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
+  tr.db-clickable  td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
+  tr.list-clickable    td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
+  tr.calc-clickable    td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
+  tr.compare-clickable td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
+  .db-statement { background: #f8fafc; color: #000000; font-family: 'Courier New', monospace;
+                  font-size: 0.78rem; padding: 12px; border-radius: 6px; white-space: pre-wrap;
+                  word-break: break-all; margin-top: 8px; max-height: 400px; overflow-y: auto;
+                  border: 1.5px solid #bbf7d0; }
+
+  /* Action type row colors — vivid saturated palette (pops on dark bg) */
+  .at-1   { background: #60a5fa; }  /* Process   – vivid blue    */
+  .at-3   { background: #4ade80; }  /* Calculate – vivid green   */
+  .at-4   { background: #fb923c; }  /* Compare   – vivid orange  */
+  .at-5   { background: #a78bfa; }  /* Database  – vivid purple  */
+  .at-6   { background: #2dd4bf; }  /* Dialog    – vivid teal    */
+  .at-7   { background: #f87171; }  /* Execute   – vivid red     */
+  .at-9   { background: #facc15; }  /* List      – vivid yellow  */
+  .at-11  { background: #f472b6; }  /* Receive   – vivid pink    */
+  .at-12  { background: #fbbf24; }  /* Report    – vivid amber   */
+  .at-13  { background: #22d3ee; }  /* Send      – vivid cyan    */
+  .at-14  { background: #c084fc; }  /* User      – vivid violet  */
+  .at-neg1{ background: #ffffff; }  /* Comment   – white         */
+
+  #detail-panel { display: none; position: fixed; top: 0; right: 0; width: 420px; height: 100vh;
+                  background: linear-gradient(160deg, #f5f3ff 0%, #eff6ff 100%);
+                  border-left: 3px solid #a78bfa; overflow-y: auto;
+                  padding: 20px; z-index: 100; box-shadow: -6px 0 24px rgba(124,58,237,0.18); }
+  #detail-panel h2 { color: #6d28d9; margin-bottom: 12px; font-size: 1rem; font-weight: 700; }
+  #detail-panel .close-btn { float: right; background: none; border: none; color: #dc2626;
+                              font-size: 1.2rem; cursor: pointer; }
+  .detail-row { display: flex; gap: 8px; margin-bottom: 8px; font-size: 0.83rem; }
+  .detail-label { color: #000000; min-width: 110px; font-weight: 600; }
+  .detail-val { color: #000000; word-break: break-all; font-weight: 500; }
+
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚙️ HighJump EAR Explorer</h1>
+  <input id="inp-process" type="text" placeholder="Process name…" value="menu" style="width:185px"/>
+  <input id="inp-app"     type="text" placeholder="Application"   value="WA"   style="width:65px"/>
+  <select id="inp-type" style="width:130px">
+    <option value="">All action types</option>
+    <option value="1">Process</option>
+    <option value="3">Calculate</option>
+    <option value="4">Compare</option>
+    <option value="5">Database</option>
+    <option value="6">Dialog</option>
+    <option value="7">Execute</option>
+    <option value="9">List</option>
+    <option value="11">Receive</option>
+    <option value="12">Report</option>
+    <option value="13">Send</option>
+    <option value="14">User</option>
+    <option value="-1">Comment</option>
+  </select>
+  <button onclick="loadData()">🔍 Search</button>
+  <button id="btn-back" onclick="goBack()">← Back</button>
+  <span style="margin-left:auto; font-size:0.8rem; color:#94a3b8; font-weight:500; white-space:nowrap;">ArcadiaWHJSqlStage · EAR</span>
+</header>
+
+
+
+
+<div class="proc-list" id="proc-list-view" style="display:none"></div>
+
+<div class="grid-wrap" id="grid-view">
+  <table id="grid">
+    <thead>
+      <tr>
+        <th style="width:52px">Line</th>
+        <th style="width:90px">Label</th>
+        <th style="width:110px">Action Type</th>
+        <th>Action Name</th>
+        <th style="width:90px">On Pass</th>
+        <th style="width:90px">On Fail</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+
+<div id="detail-panel">
+  <button class="close-btn" onclick="closeDetail()">✕</button>
+  <h2 id="detail-title">Step Detail</h2>
+  <div id="detail-content"></div>
+</div>
+
+<script>
+const ACTION_COLORS = {
+  '1':'#60a5fa','3':'#4ade80','4':'#fb923c','5':'#a78bfa',
+  '6':'#2dd4bf','7':'#f87171','9':'#facc15','11':'#f472b6',
+  '12':'#fbbf24','13':'#22d3ee','14':'#c084fc','-1':'#ffffff'
+};
+const ACTION_LABELS = {
+  '1':'Process','3':'Calculate','4':'Compare','5':'Database',
+  '6':'Dialog','7':'Execute','9':'List','11':'Receive',
+  '12':'Report','13':'Send','14':'User','-1':'Comment'
+};
+
+let allRows    = [];
+let searchList = [];   // list of matching process objects from /api/search
+let viewMode   = 'list';  // 'list' | 'detail'
+let sortCol = 'process_name', sortAsc = true;
+let navStack = [];  // history stack
+
+
+
+// Search — shows list of matching process objects
+async function loadData() {
+  const process = document.getElementById('inp-process').value.trim();
+  const app     = document.getElementById('inp-app').value.trim();
+  try {
+    const res = await fetch(`/api/search?process=${encodeURIComponent(process)}&application=${encodeURIComponent(app)}`);
+    searchList = await res.json();
+    if (searchList.error) throw new Error(searchList.error);
+    viewMode = 'list';
+    navStack = [];
+    document.getElementById('btn-back').style.display = 'none';
+    renderProcessList();
+  } catch(e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+// Sync Back button text to the top of the nav stack
+function updateBackButton() {
+  const backBtn = document.getElementById('btn-back');
+  if (!navStack.length) { backBtn.style.display = 'none'; return; }
+  backBtn.style.display = 'inline-block';
+  const top = navStack[navStack.length - 1];
+  backBtn.textContent = `← ${top.backLabel}`;
+}
+
+// Open a specific process by ID — shows its steps
+async function openProcess(processId, processName, pushToStack) {
+  const app = document.getElementById('inp-app').value.trim();
+  if (pushToStack) {
+    const searchTerm = document.getElementById('inp-process').value;
+    navStack.push({ mode: 'list', searchList: searchList.slice(), processInput: searchTerm,
+                    backLabel: `Search: "${searchTerm}"` });
+    updateBackButton();
+  }
+  // Update search box to exact name of the clicked process
+  document.getElementById('inp-process').value = processName;
+  try {
+    const res = await fetch(`/api/process/${encodeURIComponent(processId)}?application=${encodeURIComponent(app)}`);
+    allRows = await res.json();
+    if (allRows.error) throw new Error(allRows.error);
+    viewMode = 'detail';
+    closeDetail();
+    renderTable();
+  } catch(e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+function renderProcessList() {
+  document.getElementById('proc-list-view').style.display = 'block';
+  document.getElementById('grid-view').style.display      = 'none';
+  const container = document.getElementById('proc-list-view');
+  if (!searchList.length) {
+    container.innerHTML = '<p style="color:#8892a4;padding:12px">No matching processes found.</p>';
+    return;
+  }
+  // Use data attributes to avoid quote-escaping issues in onclick
+  container.innerHTML = searchList.map(p => `
+    <div class="proc-list-item" data-id="${p.id}">
+      <span class="proc-list-icon">⚙️</span>
+      <div>
+        <div class="proc-list-name">${p.name}</div>
+        ${p.description ? `<div class="proc-list-desc">${p.description}</div>` : ''}
+      </div>
+      <span class="proc-list-version">v${p.version}</span>
+    </div>
+  `).join('');
+  // Attach click handlers after rendering using the data-id to look up the process
+  container.querySelectorAll('.proc-list-item').forEach((el, i) => {
+    el.addEventListener('click', () => openProcess(searchList[i].id, searchList[i].name, true));
+  });
+}
+
+// Jump to the row whose label matches, expanding its group if collapsed
+function jumpToLabel(label) {
+  const rows = document.querySelectorAll('tbody tr.detail-row');
+  for (const row of rows) {
+    const lc = row.querySelector('td.label-col');
+    if (lc && lc.textContent.trim() === label.trim()) {
+      if (row.style.display === 'none') {
+        row.style.display = '';
+        const gk = row.dataset.group;
+        if (gk) {
+          const hdr = document.querySelector(`tr.group-header[data-group="${gk}"]`);
+          if (hdr) { const ic = hdr.querySelector('.toggle-icon'); if (ic) ic.textContent = '▼'; }
+        }
+      }
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      row.classList.remove('jump-highlight');
+      void row.offsetWidth; // restart animation if already highlighted
+      row.classList.add('jump-highlight');
+      setTimeout(() => row.classList.remove('jump-highlight'), 1500);
+      return;
+    }
+  }
+}
+
+// Shared: reveal a row if collapsed, scroll to it and flash
+function jumpToRow(row) {
+  if (!row) return;
+  if (row.style.display === 'none') {
+    row.style.display = '';
+    const gk = row.dataset.group;
+    if (gk) {
+      const hdr = document.querySelector(`tr.group-header[data-group="${gk}"]`);
+      if (hdr) { const ic = hdr.querySelector('.toggle-icon'); if (ic) ic.textContent = '▼'; }
+    }
+  }
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  row.classList.remove('jump-highlight'); void row.offsetWidth;
+  row.classList.add('jump-highlight');
+  setTimeout(() => row.classList.remove('jump-highlight'), 1500);
+}
+
+function jumpToNext(seq) {
+  // Skip comment rows when moving forward
+  const rows = [...document.querySelectorAll('tbody tr.detail-row')]
+    .filter(r => parseInt(r.dataset.seq) > seq && !r.classList.contains('commented'))
+    .sort((a, b) => parseInt(a.dataset.seq) - parseInt(b.dataset.seq));
+  jumpToRow(rows[0]);
+}
+function jumpToPrev(seq) {
+  // Skip comment rows when moving backward
+  const rows = [...document.querySelectorAll('tbody tr.detail-row')]
+    .filter(r => parseInt(r.dataset.seq) < seq && !r.classList.contains('commented'))
+    .sort((a, b) => parseInt(b.dataset.seq) - parseInt(a.dataset.seq));
+  jumpToRow(rows[0]);
+}
+function jumpToFirst() {
+  // TOP: first non-comment row
+  const rows = [...document.querySelectorAll('tbody tr.detail-row')]
+    .filter(r => !r.classList.contains('commented'))
+    .sort((a, b) => parseInt(a.dataset.seq) - parseInt(b.dataset.seq));
+  jumpToRow(rows[0]);
+}
+function jumpToLast() {
+  // BOTTOM: last non-comment row
+  const rows = [...document.querySelectorAll('tbody tr.detail-row')]
+    .filter(r => !r.classList.contains('commented'))
+    .sort((a, b) => parseInt(b.dataset.seq) - parseInt(a.dataset.seq));
+  jumpToRow(rows[0]);
+}
+
+// Resolve the destination sequence number at render time so we can show it in the link
+function getTargetSeq(direction, row) {
+  const pid = String(row.process_id);
+  const seq = row.sequence;
+  const same = allRows.filter(r => String(r.process_id) === pid && r.action_type !== -1);
+  switch (direction) {
+    case 'next':  { const c = same.filter(r => r.sequence > seq).sort((a,b) => a.sequence - b.sequence); return c.length ? c[0].sequence : null; }
+    case 'prev':  { const c = same.filter(r => r.sequence < seq).sort((a,b) => b.sequence - a.sequence); return c.length ? c[0].sequence : null; }
+    case 'first': { const c = [...same].sort((a,b) => a.sequence - b.sequence); return c.length ? c[0].sequence : null; }
+    case 'last':  { const c = [...same].sort((a,b) => b.sequence - a.sequence); return c.length ? c[0].sequence : null; }
+  }
+  return null;
+}
+function getLabelTargetSeq(label, row) {
+  const pid = String(row.process_id);
+  const found = allRows.find(r => String(r.process_id) === pid && (r.label || '').trim() === label.trim());
+  return found ? found.sequence : null;
+}
+function seqBadge(seq) { return seq != null ? ` <span style="font-size:0.75em;opacity:0.7">(${seq})</span>` : ''; }
+
+// Render a pass/fail label cell
+const NO_LINK = new Set(['PASS','FAIL']);
+function makePassFail(val, r) {
+  if (!val) return '';
+  const seq = r.sequence;
+  const up = val.toUpperCase();
+  if (NO_LINK.has(up))   return val;   // plain text
+  if (up === 'NEXT') {
+    const t = getTargetSeq('next', r);
+    return `<span class="label-link" onclick="event.stopPropagation();jumpToNext(${seq})">↪ NEXT${seqBadge(t)}</span>`;
+  }
+  if (up === 'PREVIOUS') {
+    const t = getTargetSeq('prev', r);
+    return `<span class="label-link" onclick="event.stopPropagation();jumpToPrev(${seq})">↪ PREVIOUS${seqBadge(t)}</span>`;
+  }
+  if (up === 'TOP') {
+    const t = getTargetSeq('first', r);
+    return `<span class="label-link" onclick="event.stopPropagation();jumpToFirst()">↪ TOP${seqBadge(t)}</span>`;
+  }
+  if (up === 'BOTTOM') {
+    const t = getTargetSeq('last', r);
+    return `<span class="label-link" onclick="event.stopPropagation();jumpToLast()">↪ BOTTOM${seqBadge(t)}</span>`;
+  }
+  const t = getLabelTargetSeq(val, r);
+  return `<span class="label-link" onclick="event.stopPropagation();jumpToLabel('${val.replace(/'/g,"\\'")}')">↪ ${val}${seqBadge(t)}</span>`;
+}
+
+function sortBy(col) {
+  if (sortCol === col) sortAsc = !sortAsc;
+  else { sortCol = col; sortAsc = true; }
+  renderTable();
+}
+
+function renderTable() {
+  const filterType = document.getElementById('inp-type').value;
+
+  let rows = allRows.filter(r => {
+    if (filterType && String(r.action_type) !== filterType) return false;
+    return true;
+  });
+
+  rows.sort((a, b) => {
+    // Primary: process_name always
+    const pn1 = (a.process_name || '').toLowerCase();
+    const pn2 = (b.process_name || '').toLowerCase();
+    if (pn1 !== pn2) return sortAsc ? (pn1 > pn2 ? 1 : -1) : (pn1 < pn2 ? 1 : -1);
+    // Secondary: sequence always ascending within a process
+    return a.sequence - b.sequence;
+  });
+
+
+  document.getElementById('proc-list-view').style.display = 'none';
+  document.getElementById('grid-view').style.display      = 'block';
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+  // Count distinct processes to decide auto-expand
+  const distinctGroups = [...new Set(rows.map(r => r.process_name))].length;
+  const autoExpand     = distinctGroups === 1;
+  let lastProcess = null;
+  let groupKey = 0;
+  rows.forEach(r => {
+    // Insert group header when process name changes
+    if (r.process_name !== lastProcess) {
+      lastProcess = r.process_name;
+      groupKey++;
+      const thisKey = groupKey;   // snapshot — fixes closure capture bug
+      const groupCount = rows.filter(x => x.process_name === r.process_name).length;
+      const th = document.createElement('tr');
+      th.className = 'group-header';
+      th.dataset.group = thisKey;
+      th.innerHTML = `<td colspan="6"><span class="toggle-icon">▶</span>⚙️ ${r.process_name}<span class="proc-badge">${groupCount} steps</span></td>`;
+      th.onclick = () => toggleGroup(thisKey, th);
+      tbody.appendChild(th);
+      // Auto-expand the group header icon if only one group
+      if (autoExpand) th.querySelector('.toggle-icon').textContent = '▼';
+    }
+    const tr = document.createElement('tr');
+    const typeKey = String(r.action_type);
+    tr.className = 'detail-row ' + (r.action_type === -1 ? 'commented ' : '') + `at-${typeKey === '-1' ? 'neg1' : typeKey}`;
+    tr.dataset.group = groupKey;
+    tr.dataset.seq   = r.sequence;
+    // Auto-expand: show rows immediately when only one group
+    if (autoExpand) tr.style.display = 'table-row';
+    tr.style.background = ACTION_COLORS[typeKey] || '#f4f6fb';
+    const isProcess  = r.action_type === 1 && r.action_id;
+    const isDatabase = r.action_type === 5 && r.action_id;
+    const isList     = r.action_type === 9 && r.action_id;
+    const isCalc     = r.action_type === 3 && r.action_id;
+    const isCompare  = r.action_type === 4 && r.action_id;
+    if (isProcess)  tr.classList.add('drillable');
+    if (isDatabase) tr.classList.add('db-clickable');
+    if (isList)     tr.classList.add('list-clickable');
+    if (isCalc)     tr.classList.add('calc-clickable');
+    if (isCompare)  tr.classList.add('compare-clickable');
+    tr.innerHTML = `
+      <td class="seq">${r.sequence}</td>
+      <td class="label-col">${r.label || ''}</td>
+      <td>${r.action_type_name}</td>
+      <td class="action-name" title="${r.action_name || ''}">${r.action_name || ''}</td>
+      <td class="pass">${makePassFail(r.pass_label, r)}</td>
+      <td class="fail">${makePassFail(r.fail_label, r)}</td>`;
+    tr.onclick = (e) => {
+      if (isProcess  && e.target.classList.contains('action-name')) drillInto(r.action_id, r.action_name);
+      else if (isDatabase && e.target.classList.contains('action-name')) showDbDetail(r, tr);
+      else if (isList && e.target.classList.contains('action-name')) showListDetail(r, tr);
+      else if (isCalc    && e.target.classList.contains('action-name')) showCalcDetail(r, tr);
+      else if (isCompare && e.target.classList.contains('action-name')) showCompareDetail(r, tr);
+      else showDetail(r, tr);
+    };
+    tbody.appendChild(tr);
+  });
+}
+
+function drillInto(processId, processName) {
+  // Label is the current process name (the page we're leaving)
+  const currentName = document.getElementById('inp-process').value || 'Previous';
+  navStack.push({
+    mode:      'detail',
+    allRows:   allRows.slice(),
+    backLabel: currentName,
+    application: document.getElementById('inp-app').value
+  });
+  updateBackButton();
+  closeDetail();
+  // Navigate directly to the specific process object by ID
+  openProcess(processId, processName, false);
+}
+
+
+
+async function showCompareDetail(r, tr) {
+  document.querySelectorAll('tbody tr.selected').forEach(el => el.classList.remove('selected'));
+  tr.classList.add('selected');
+  document.getElementById('detail-title').textContent = `⚖️ Compare: ${r.action_name || ''}`;
+  document.getElementById('detail-content').innerHTML = '<p style="color:#8892a4;font-size:0.83rem">Loading…</p>';
+  document.getElementById('detail-panel').style.display = 'block';
+  try {
+    const res  = await fetch(`/api/compare-action/${encodeURIComponent(r.action_id)}`);
+    const rows = await res.json();
+    if (!rows.length) {
+      document.getElementById('detail-content').innerHTML = '<p style="color:#f38ba8">No detail found.</p>';
+      return;
+    }
+    const d = rows[0];
+    const fmtOp = (type, name) => {
+      if (name == null) return '?';
+      if (type === 17) return `[Field: ${name}]`;
+      if (type === 19) return `[Record: ${name}]`;
+      if (type === 18) return `"${name}"`;
+      return name;
+    };
+    const op1  = fmtOp(d.operand1_type, d.operand1_name);
+    const op2  = fmtOp(d.operand2_type, d.operand2_name);
+    const expr = `${op1} &nbsp;<strong>${d.operator_symbol}</strong>&nbsp; ${op2}`;
+    const row  = (label, val) => val != null && val !== ''
+      ? `<div class="detail-row"><span class="detail-label">${label}</span><span class="detail-val">${val}</span></div>`
+      : '';
+    document.getElementById('detail-content').innerHTML =
+      row('Description', d.description) +
+      `<div style="margin-top:10px;padding:10px 14px;background:linear-gradient(90deg,#ede9fe,#dbeafe);border-radius:8px;font-family:monospace;color:#000000;font-size:0.9rem;font-weight:600;border:1.5px solid #a78bfa;box-shadow:0 2px 8px rgba(124,58,237,0.12)">${expr} ?</div>`;
+  } catch(e) {
+    document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
+  }
+}
+
+async function showCalcDetail(r, tr) {
+  document.querySelectorAll('tbody tr.selected').forEach(el => el.classList.remove('selected'));
+  tr.classList.add('selected');
+  document.getElementById('detail-title').textContent = `🧮 Calculate: ${r.action_name || ''}`;
+  document.getElementById('detail-content').innerHTML = '<p style="color:#8892a4;font-size:0.83rem">Loading…</p>';
+  document.getElementById('detail-panel').style.display = 'block';
+  try {
+    const res  = await fetch(`/api/calc-action/${encodeURIComponent(r.action_id)}`);
+    const rows = await res.json();
+    if (!rows.length) {
+      document.getElementById('detail-content').innerHTML = '<p style="color:#f38ba8">No detail found.</p>';
+      return;
+    }
+
+    // Helper: format an operand with its type
+    const fmtOp = (type, name) => {
+      if (name == null) return null;
+      if (type === 17) return `[Field: ${name}]`;
+      if (type === 19) return `[Record: ${name}]`;
+      if (type === 18) return `"${name}"`;   // constant value
+      return name;
+    };
+
+    // Helper: build readable expression from one detail row
+    const buildExpr = d => {
+      const res  = fmtOp(d.result_type, d.result_name)   || '?';
+      const op1  = fmtOp(d.operand1_type, d.operand1_name);
+      const op2  = fmtOp(d.operand2_type, d.operand2_name);
+      const op3  = fmtOp(d.operand3_type, d.operand3_name);
+      const sym  = d.operator_symbol;
+      let rhs;
+      if      (sym === 'Len')    rhs = `Len(${op1})`;
+      else if (sym === 'Mid')    rhs = op3 ? `Mid(${op1}, ${op2}, ${op3})` : `Mid(${op1}, ${op2})`;
+      else if (sym === 'Search') rhs = `Search(${op1}, ${op2})`;
+      else if (sym === ':=')     rhs = op1;
+      else if (op2)              rhs = `${op1} ${sym} ${op2}`;
+      else                       rhs = op1;
+      return `${res} = ${rhs}`;
+    };
+
+    const first = rows[0];
+    let html = '';
+    if (first.description) html += `<div class="detail-row"><span class="detail-label">Description</span><span class="detail-val">${first.description}</span></div>`;
+    html += `<table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:0.8rem;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(124,58,237,0.10)">
+      <thead><tr style="background:linear-gradient(90deg,#6d28d9,#4338ca);color:#ffffff">
+        <th style="padding:4px 6px;text-align:left;width:36px">#</th>
+        <th style="padding:4px 6px;text-align:left">Expression</th>
+      </tr></thead><tbody>`;
+    rows.forEach((d, i) => {
+      html += `<tr style="border-bottom:1px solid #ede9fe;background:${i%2===0?'#faf5ff':'#f5f3ff'}">
+        <td style="padding:3px 6px;color:#000000;font-weight:700">${d.sequence}</td>
+        <td style="padding:3px 6px;font-family:monospace;color:#000000">${buildExpr(d)}</td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+    document.getElementById('detail-content').innerHTML = html;
+  } catch(e) {
+    document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
+  }
+}
+
+async function goBack() {
+  if (!navStack.length) return;
+  const prev = navStack.pop();
+  closeDetail();
+
+  if (prev.mode === 'list') {
+    searchList = prev.searchList;
+    document.getElementById('inp-process').value = prev.processInput;
+    viewMode = 'list';
+    updateBackButton();
+    renderProcessList();
+  } else {
+    allRows  = prev.allRows;
+    document.getElementById('inp-process').value = prev.backLabel;
+    viewMode = 'detail';
+    updateBackButton();
+    renderTable();
+  }
+}
+
+function toggleGroup(groupKey, headerRow) {
+  const rows = document.querySelectorAll(`tr.detail-row[data-group="${groupKey}"]`);
+  const icon = headerRow.querySelector('.toggle-icon');
+  const isExpanded = icon.textContent === '▼';
+  rows.forEach(r => r.style.display = isExpanded ? 'none' : 'table-row');
+  icon.textContent = isExpanded ? '▶' : '▼';
+}
+
+async function showDbDetail(r, tr) {
+  document.querySelectorAll('tbody tr.selected').forEach(el => el.classList.remove('selected'));
+  tr.classList.add('selected');
+  document.getElementById('detail-title').textContent = `📋 DB: ${r.action_name || ''}`;
+  document.getElementById('detail-content').innerHTML = '<p style="color:#8892a4;font-size:0.83rem">Loading statement…</p>';
+  document.getElementById('detail-panel').style.display = 'block';
+  try {
+    const res  = await fetch(`/api/db-action/${encodeURIComponent(r.action_id)}`);
+    const rows = await res.json();
+    if (!rows.length) {
+      document.getElementById('detail-content').innerHTML = '<p style="color:#f38ba8">No statement found.</p>';
+      return;
+    }
+    const html = rows.map(row => `
+      <div class="detail-row"><span class="detail-label">Name</span><span class="detail-val">${row.name || ''}</span></div>
+      <div class="detail-row"><span class="detail-label">Description</span><span class="detail-val">${row.description || ''}</span></div>
+      <div class="detail-row"><span class="detail-label">Seq</span><span class="detail-val">${row.sequence}</span></div>
+      <pre class="db-statement">${(row.statement || '').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>
+      <hr style="border-color:#d0d7e8;margin:10px 0"/>
+    `).join('');
+    document.getElementById('detail-content').innerHTML = html;
+  } catch(e) {
+    document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
+  }
+}
+
+async function showListDetail(r, tr) {
+  document.querySelectorAll('tbody tr.selected').forEach(el => el.classList.remove('selected'));
+  tr.classList.add('selected');
+  document.getElementById('detail-title').textContent = `📝 List: ${r.action_name || ''}`;
+  document.getElementById('detail-content').innerHTML = '<p style="color:#8892a4;font-size:0.83rem">Loading…</p>';
+  document.getElementById('detail-panel').style.display = 'block';
+  try {
+    const res  = await fetch(`/api/list-action/${encodeURIComponent(r.action_id)}`);
+    const rows = await res.json();
+    if (!rows.length) {
+      document.getElementById('detail-content').innerHTML = '<p style="color:#f38ba8">No detail found.</p>';
+      return;
+    }
+    const d = rows[0];
+    const typeLabel = t => t === 17 ? 'Field' : t === 19 ? 'Record' : t === -1 ? '' : '';
+    const op1 = d.operand1_name ? `[${typeLabel(d.operand1_type)}: ${d.operand1_name}]` : null;
+    const op2 = d.operand2_name ? `[${typeLabel(d.operand2_type)}: ${d.operand2_name}]` : null;
+    const row = (label, val) => val != null && val !== ''
+      ? `<div class="detail-row"><span class="detail-label">${label}</span><span class="detail-val">${val}</span></div>`
+      : '';
+    document.getElementById('detail-content').innerHTML =
+      row('Name',        d.name)        +
+      row('Description', d.description) +
+      row('List',        d.list_name)   +
+      row('Operation',   d.operator_name) +
+      (op1 ? row('Operand 1', op1) : '') +
+      (op2 ? row('Operand 2', op2) : '') +
+      (d.operator_name === 'Find' ? row('Find Exact', d.find_exact ? 'Yes' : 'No') : '');
+  } catch(e) {
+    document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
+  }
+}
+
+function showDetail(r, tr) {
+  document.querySelectorAll('tbody tr.selected').forEach(el => el.classList.remove('selected'));
+  tr.classList.add('selected');
+  document.getElementById('detail-title').textContent = `Seq ${r.sequence}: ${r.action_type_name}`;
+  document.getElementById('detail-content').innerHTML = [
+    ['Process',     r.process_name],
+    ['Sequence',    r.sequence],
+    ['Label',       r.label],
+    ['Action Type', r.action_type_name],
+    ['Action Name', r.action_name],
+    ['On Pass',     makePassFail(r.pass_label, r)],
+    ['On Fail',     makePassFail(r.fail_label, r)],
+    ['Commented',   r.commented_out ? '⚠ Yes' : 'No'],
+    ['Action ID',   `<span style="font-size:0.75rem">${r.action_id||''}</span>`],
+    ['Process ID',  `<span style="font-size:0.75rem">${r.process_id||''}</span>`],
+  ].map(([l,v]) => `<div class="detail-row"><span class="detail-label">${l}</span><span class="detail-val">${v||'—'}</span></div>`).join('');
+  document.getElementById('detail-panel').style.display = 'block';
+}
+
+function closeDetail() {
+  document.getElementById('detail-panel').style.display = 'none';
+  document.querySelectorAll('tbody tr.selected').forEach(el => el.classList.remove('selected'));
+}
+
+document.getElementById('inp-process').addEventListener('keydown', e => { if(e.key==='Enter') loadData(); });
+document.getElementById('inp-type').addEventListener('change', renderTable);
+
+loadData();
+</script>
+</body>
+</html>
