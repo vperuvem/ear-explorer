@@ -76,7 +76,7 @@ function Resolve-Guids($rows) {
 
 $DETAIL_JOINS = @"
 FROM t_app_process_object m (NOLOCK)
-JOIN t_app_process_object_detail d (NOLOCK) ON m.id = d.id
+JOIN t_app_process_object_detail d (NOLOCK) ON m.id = d.id AND d.version = m.version
 JOIN t_application_development a (NOLOCK)   ON m.application_id = a.application_id
 LEFT JOIN t_app_process_object po   (NOLOCK) ON d.action_type =  1 AND d.action_id = po.id
 LEFT JOIN t_act_calculate     calc  (NOLOCK) ON d.action_type =  3 AND d.action_id = calc.id
@@ -89,20 +89,22 @@ LEFT JOIN t_act_send          snd   (NOLOCK) ON d.action_type = 13 AND d.action_
 LEFT JOIN t_act_user          usr   (NOLOCK) ON d.action_type = 14 AND d.action_id = usr.id
 LEFT JOIN t_act_receive       rcv   (NOLOCK) ON d.action_type = 11 AND d.action_id = rcv.id
 LEFT JOIN t_act_report        rpt   (NOLOCK) ON d.action_type = 12 AND d.action_id = rpt.id
+LEFT JOIN t_app_record        rec   (NOLOCK) ON d.action_type = 19 AND d.action_id = rec.id
 "@
 
 $DETAIL_COLS = @"
-SELECT m.name AS process_name, d.sequence, d.label,
+SELECT DISTINCT m.name AS process_name, d.sequence, d.label,
     CASE d.action_type
         WHEN  1 THEN 'Process'    WHEN  3 THEN 'Calculate'  WHEN  4 THEN 'Compare'
         WHEN  5 THEN 'Database'   WHEN  6 THEN 'Dialog'     WHEN  7 THEN 'Execute'
         WHEN  9 THEN 'List'       WHEN 11 THEN 'Receive'    WHEN 12 THEN 'Report'
-        WHEN 13 THEN 'Send'       WHEN 14 THEN 'User'       WHEN -1 THEN 'Comment'
+        WHEN 13 THEN 'Send'       WHEN 14 THEN 'User'       WHEN 19 THEN 'Record'
+        WHEN -1 THEN 'Comment'
         ELSE 'Unknown (' + CAST(d.action_type AS VARCHAR) + ')'
     END AS action_type_name, d.action_type,
     COALESCE(po.name,calc.name,comp.name,db.name,dlg.name,exe.name,
-             lst.name,snd.name,usr.name,rcv.name,rpt.name,
-             m.comments) AS action_name,
+             lst.name,snd.name,usr.name,rcv.name,rpt.name,rec.name,
+             d.comments) AS action_name,
     d.pass_label, d.fail_label, d.commented_out,
     CAST(d.action_id AS NVARCHAR(36)) AS action_id,
     CAST(m.id AS NVARCHAR(36)) AS process_id
@@ -141,7 +143,7 @@ while ($listener.IsListening) {
                      FROM t_app_process_object m (NOLOCK)
                      JOIN t_application_development a (NOLOCK) ON m.application_id = a.application_id
                      WHERE a.name = @app AND lower(m.name) LIKE '%' + lower(@proc) + '%'
-                     ORDER BY lower(m.name)"
+                     ORDER BY m.name"
             Send-Json $resp (Invoke-Sql $sql @{ '@proc'=$proc; '@app'=$app })
 
         } elseif ($path -match '^/api/process/(.+)$') {
@@ -162,7 +164,23 @@ while ($listener.IsListening) {
                           JOIN t_app_process_object ch (NOLOCK)
                               ON d2.action_id = ch.id AND d2.action_type = 1
                               AND ch.name COLLATE SQL_Latin1_General_CP1_CS_AS = @child)
-                      ORDER BY lower(m.name), d.sequence"
+                      ORDER BY m.name, d.sequence"
+            Send-Json $resp (Invoke-Sql $sql @{ '@child'=$child; '@app'=$app })
+
+        } elseif ($path -eq '/api/caller-objects') {
+            # Returns unique caller process objects (for list view) — lighter than /api/callers
+            $child = if ($qs['childProcess']) { $qs['childProcess'] } else { '' }
+            $app   = if ($qs['application'])  { $qs['application'] }  else { 'WA' }
+            $sql   = "SELECT DISTINCT
+                          CAST(m.id AS NVARCHAR(36)) AS id,
+                          m.name, m.description, m.version
+                      FROM t_app_process_object m (NOLOCK)
+                      JOIN t_application_development a (NOLOCK) ON m.application_id = a.application_id
+                      JOIN t_app_process_object_detail d (NOLOCK) ON d.id = m.id AND d.action_type = 1
+                      JOIN t_app_process_object ch (NOLOCK) ON d.action_id = ch.id
+                      WHERE a.name = @app
+                      AND ch.name COLLATE SQL_Latin1_General_CP1_CS_AS = @child
+                      ORDER BY m.name"
             Send-Json $resp (Invoke-Sql $sql @{ '@child'=$child; '@app'=$app })
 
         } elseif ($path -match '^/api/compare-action/(.+)$') {
@@ -301,6 +319,29 @@ while ($listener.IsListening) {
                     LEFT JOIN t_app_field  f2 (NOLOCK) ON l.operand2_type  = 17 AND l.operand2_id = f2.id
                     LEFT JOIN t_app_record r2 (NOLOCK) ON l.operand2_type  = 19 AND l.operand2_id = r2.id
                     WHERE l.id = @id"
+            Send-Json $resp (Invoke-Sql $sql @{ '@id'=$id })
+
+        } elseif ($path -match '^/api/dialog-action/(.+)$') {
+            $id  = [System.Uri]::UnescapeDataString($Matches[1])
+            $sql = "SELECT
+                        d.name, d.description, dd.sequence,
+                        COALESCE(ff.name, fr.name, dd.field_id) AS field_name,
+                        CASE dd.field_type WHEN 17 THEN 'Field' WHEN 19 THEN 'Record' ELSE '' END AS field_type_name,
+                        COALESCE(pf.name, pc.value, pr.name, CASE WHEN dd.prompt_type IN (-1,0) THEN '' ELSE dd.prompt_id END) AS prompt_name,
+                        CASE dd.prompt_type WHEN 17 THEN 'Field' WHEN 18 THEN 'Const' WHEN 21 THEN 'Resource' ELSE '' END AS prompt_type_name,
+                        COALESCE(pv.name, CASE WHEN dd.validation_type IN (-1,0) THEN '' ELSE dd.validation_id END) AS validation_name,
+                        CASE dd.validation_type WHEN 1 THEN 'Process' ELSE '' END AS validation_type_name,
+                        dd.required, dd.clear_initially
+                    FROM t_act_dialog d (NOLOCK)
+                    JOIN t_act_dialog_detail dd (NOLOCK) ON d.id = dd.id
+                    LEFT JOIN t_app_field    ff (NOLOCK) ON dd.field_type      = 17 AND dd.field_id      = ff.id
+                    LEFT JOIN t_app_record   fr (NOLOCK) ON dd.field_type      = 19 AND dd.field_id      = fr.id
+                    LEFT JOIN t_app_field    pf (NOLOCK) ON dd.prompt_type     = 17 AND dd.prompt_id     = pf.id
+                    LEFT JOIN t_app_constant pc (NOLOCK) ON dd.prompt_type     = 18 AND dd.prompt_id     = pc.id
+                    LEFT JOIN t_resource     pr (NOLOCK) ON dd.prompt_type     = 21 AND dd.prompt_id     = pr.id
+                    LEFT JOIN t_app_process_object pv (NOLOCK) ON dd.validation_type = 1 AND dd.validation_id = pv.id
+                    WHERE d.id = @id
+                    ORDER BY dd.sequence"
             Send-Json $resp (Invoke-Sql $sql @{ '@id'=$id })
 
         } elseif ($path -match '^/api/db-action/(.+)$') {
