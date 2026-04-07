@@ -81,30 +81,39 @@
                                  border-radius: 4px; padding: 1px 8px; margin-left: 8px;
                                  font-size: 0.75rem; font-weight: 500; }
   tr.group-header .toggle-icon { margin-right: 8px; font-style: normal; }
+  tr.group-header .callers-link { display: inline-block; background: rgba(255,255,255,0.18);
+                                   border-radius: 4px; padding: 1px 10px; margin-left: 12px;
+                                   font-size: 0.75rem; font-weight: 500; cursor: pointer;
+                                   text-decoration: underline dotted rgba(255,255,255,0.6); }
+  tr.group-header .callers-link:hover { background: rgba(255,255,255,0.35); }
+  tr.group-header .proc-name-link { cursor: pointer; text-decoration: underline dotted rgba(255,255,255,0.7); }
+  tr.group-header .proc-name-link:hover { text-decoration-style: solid; }
   tr.detail-row { display: none; } /* collapsed by default */
   tr.drillable     td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
   tr.db-clickable  td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
   tr.list-clickable    td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
   tr.calc-clickable    td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
   tr.compare-clickable td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
+  tr.dialog-clickable  td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
   .db-statement { background: #f8fafc; color: #000000; font-family: 'Courier New', monospace;
                   font-size: 0.78rem; padding: 12px; border-radius: 6px; white-space: pre-wrap;
                   word-break: break-all; margin-top: 8px; max-height: 400px; overflow-y: auto;
                   border: 1.5px solid #bbf7d0; }
 
-  /* Action type row colors — vivid saturated palette (pops on dark bg) */
-  .at-1   { background: #60a5fa; }  /* Process   – vivid blue    */
-  .at-3   { background: #4ade80; }  /* Calculate – vivid green   */
-  .at-4   { background: #fb923c; }  /* Compare   – vivid orange  */
-  .at-5   { background: #a78bfa; }  /* Database  – vivid purple  */
-  .at-6   { background: #2dd4bf; }  /* Dialog    – vivid teal    */
-  .at-7   { background: #f87171; }  /* Execute   – vivid red     */
-  .at-9   { background: #facc15; }  /* List      – vivid yellow  */
-  .at-11  { background: #f472b6; }  /* Receive   – vivid pink    */
-  .at-12  { background: #fbbf24; }  /* Report    – vivid amber   */
-  .at-13  { background: #22d3ee; }  /* Send      – vivid cyan    */
-  .at-14  { background: #c084fc; }  /* User      – vivid violet  */
-  .at-neg1{ background: #ffffff; }  /* Comment   – white         */
+  /* Action type row colors — maximum saturation bright palette */
+  .at-1   { background: #39ff14; }  /* Process   – neon green       */
+  .at-3   { background: #00e5ff; }  /* Calculate – neon cyan        */
+  .at-4   { background: #ff40ff; }  /* Compare   – neon magenta     */
+  .at-5   { background: #ffff00; }  /* Database  – fluorescent yellow */
+  .at-6   { background: #ffff00; }  /* Dialog    – neon yellow      */
+  .at-7   { background: #ff2d2d; }  /* Execute   – neon red         */
+  .at-9   { background: #ffff00; }  /* List      – neon yellow      */
+  .at-11  { background: #ff6ec7; }  /* Receive   – neon hot pink    */
+  .at-12  { background: #ffd300; }  /* Report    – neon amber/gold  */
+  .at-13  { background: #0080ff; }  /* Send      – neon blue        */
+  .at-14  { background: #b5ff00; }  /* User      – neon lime-green  */
+  .at-19  { background: #00ff9f; }  /* Record    – neon mint        */
+  .at-neg1{ background: #ffffff; }  /* Comment   – white            */
 
   #detail-panel { display: none; position: fixed; top: 0; right: 0; width: 420px; height: 100vh;
                   background: linear-gradient(160deg, #f5f3ff 0%, #eff6ff 100%);
@@ -156,8 +165,8 @@
       <tr>
         <th style="width:52px">Line</th>
         <th style="width:90px">Label</th>
-        <th style="width:110px">Action Type</th>
-        <th>Action Name</th>
+        <th style="width:110px">Action</th>
+        <th>Step</th>
         <th style="width:90px">On Pass</th>
         <th style="width:90px">On Fail</th>
       </tr>
@@ -174,9 +183,9 @@
 
 <script>
 const ACTION_COLORS = {
-  '1':'#60a5fa','3':'#4ade80','4':'#fb923c','5':'#a78bfa',
-  '6':'#2dd4bf','7':'#f87171','9':'#facc15','11':'#f472b6',
-  '12':'#fbbf24','13':'#22d3ee','14':'#c084fc','-1':'#ffffff'
+  '1':'#39ff14','3':'#00e5ff','4':'#ff40ff','5':'#ffff00',
+  '6':'#ffff00','7':'#ff2d2d','9':'#ffff00','11':'#ff6ec7',
+  '12':'#ffd300','13':'#0080ff','14':'#b5ff00','19':'#00ff9f','-1':'#ffffff'
 };
 const ACTION_LABELS = {
   '1':'Process','3':'Calculate','4':'Compare','5':'Database',
@@ -251,13 +260,13 @@ function renderProcessList() {
   }
   // Use data attributes to avoid quote-escaping issues in onclick
   container.innerHTML = searchList.map(p => `
-    <div class="proc-list-item" data-id="${p.id}">
+    <div class="proc-list-item" data-id="${esc(p.id)}">
       <span class="proc-list-icon">⚙️</span>
       <div>
-        <div class="proc-list-name">${p.name}</div>
-        ${p.description ? `<div class="proc-list-desc">${p.description}</div>` : ''}
+        <div class="proc-list-name">${esc(p.name)}</div>
+        ${p.description ? `<div class="proc-list-desc">${esc(p.description)}</div>` : ''}
       </div>
-      <span class="proc-list-version">v${p.version}</span>
+      <span class="proc-list-version">v${esc(p.version)}</span>
     </div>
   `).join('');
   // Attach click handlers after rendering using the data-id to look up the process
@@ -383,6 +392,19 @@ function makePassFail(val, r) {
   return `<span class="label-link" onclick="event.stopPropagation();jumpToLabel('${val.replace(/'/g,"\\'")}')">↪ ${val}${seqBadge(t)}</span>`;
 }
 
+function esc(str) {
+  return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// HTML-encode any dynamic value before inserting into innerHTML
+function esc(str) {
+  return (str == null ? '' : String(str))
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 function sortBy(col) {
   if (sortCol === col) sortAsc = !sortAsc;
   else { sortCol = col; sortAsc = true; }
@@ -426,11 +448,12 @@ function renderTable() {
       const th = document.createElement('tr');
       th.className = 'group-header';
       th.dataset.group = thisKey;
-      th.innerHTML = `<td colspan="6"><span class="toggle-icon">▶</span>⚙️ ${r.process_name}<span class="proc-badge">${groupCount} steps</span></td>`;
-      th.onclick = () => toggleGroup(thisKey, th);
+      const escId   = r.process_id;
+      const escName = r.process_name.replace(/'/g, "\\'");
+      const toggleIcon = autoExpand ? '' : `<span class="toggle-icon">▶</span>`;
+      th.innerHTML = `<td colspan="6">${toggleIcon}⚙️ <span class="proc-name-link" onclick="event.stopPropagation();drillInto('${escId}','${escName}')">${esc(r.process_name)}</span><span class="proc-badge">${groupCount} steps</span><span class="callers-link" onclick="event.stopPropagation();showCallers('${escName}')">👥 Who calls this?</span></td>`;
+      if (!autoExpand) th.onclick = () => toggleGroup(thisKey, th);
       tbody.appendChild(th);
-      // Auto-expand the group header icon if only one group
-      if (autoExpand) th.querySelector('.toggle-icon').textContent = '▼';
     }
     const tr = document.createElement('tr');
     const typeKey = String(r.action_type);
@@ -445,16 +468,18 @@ function renderTable() {
     const isList     = r.action_type === 9 && r.action_id;
     const isCalc     = r.action_type === 3 && r.action_id;
     const isCompare  = r.action_type === 4 && r.action_id;
+    const isDialog   = r.action_type === 6 && r.action_id;
     if (isProcess)  tr.classList.add('drillable');
     if (isDatabase) tr.classList.add('db-clickable');
     if (isList)     tr.classList.add('list-clickable');
     if (isCalc)     tr.classList.add('calc-clickable');
     if (isCompare)  tr.classList.add('compare-clickable');
+    if (isDialog)   tr.classList.add('dialog-clickable');
     tr.innerHTML = `
       <td class="seq">${r.sequence}</td>
-      <td class="label-col">${r.label || ''}</td>
-      <td>${r.action_type_name}</td>
-      <td class="action-name" title="${r.action_name || ''}">${r.action_name || ''}</td>
+      <td class="label-col">${esc(r.label)}</td>
+      <td>${esc(r.action_type_name)}</td>
+      <td class="action-name" title="${esc(r.action_name)}">${esc(r.action_name)}</td>
       <td class="pass">${makePassFail(r.pass_label, r)}</td>
       <td class="fail">${makePassFail(r.fail_label, r)}</td>`;
     tr.onclick = (e) => {
@@ -463,6 +488,7 @@ function renderTable() {
       else if (isList && e.target.classList.contains('action-name')) showListDetail(r, tr);
       else if (isCalc    && e.target.classList.contains('action-name')) showCalcDetail(r, tr);
       else if (isCompare && e.target.classList.contains('action-name')) showCompareDetail(r, tr);
+      else if (isDialog  && e.target.classList.contains('action-name')) showDialogDetail(r, tr);
       else showDetail(r, tr);
     };
     tbody.appendChild(tr);
@@ -484,7 +510,66 @@ function drillInto(processId, processName) {
   openProcess(processId, processName, false);
 }
 
+async function showCallers(processName) {
+  const app = document.getElementById('inp-app').value.trim();
+  // Save current state so Back returns here
+  navStack.push({ mode: viewMode === 'list'
+    ? 'list' : 'detail',
+    allRows:      allRows.slice(),
+    searchList:   searchList.slice(),
+    processInput: document.getElementById('inp-process').value,
+    backLabel:    processName
+  });
+  updateBackButton();
+  closeDetail();
+  try {
+    const res = await fetch(`/api/caller-objects?childProcess=${encodeURIComponent(processName)}&application=${encodeURIComponent(app)}`);
+    const callers = await res.json();
+    if (callers.error) throw new Error(callers.error);
+    if (!callers.length) { alert(`No processes call "${processName}".`); goBack(); return; }
+    searchList = callers;
+    viewMode   = 'list';
+    renderProcessList();
+  } catch(e) {
+    alert('Error loading callers: ' + e.message);
+  }
+}
 
+
+
+async function showDialogDetail(r, tr) {
+  showDetail(r, tr);
+  const res  = await fetch(`/api/dialog-action/${encodeURIComponent(r.action_id)}`);
+  const rows = await res.json();
+  if (!rows.length) return;
+  const d = rows[0];
+  const tableRows = rows.map(row => `
+    <tr>
+      <td style="padding:3px 8px;font-weight:700;color:#000">${row.sequence}</td>
+      <td style="padding:3px 8px">${esc(row.field_type_name)} ${esc(row.field_name)}</td>
+      <td style="padding:3px 8px">${esc(row.prompt_type_name)} ${esc(row.prompt_name)}</td>
+      <td style="padding:3px 8px">${esc(row.validation_type_name)} ${esc(row.validation_name)}</td>
+      <td style="padding:3px 8px;text-align:center">${row.required === 'Y' ? '✔' : ''}</td>
+      <td style="padding:3px 8px;text-align:center">${row.clear_initially === 'Y' ? '✔' : ''}</td>
+    </tr>`).join('');
+  const extra = document.createElement('div');
+  extra.style.cssText = 'margin-top:12px';
+  extra.innerHTML = `
+    <div style="font-weight:700;margin-bottom:4px;color:#000">${esc(d.name)}</div>
+    ${d.description ? `<div style="font-size:0.8rem;color:#000;margin-bottom:8px">${esc(d.description)}</div>` : ''}
+    <table style="width:100%;border-collapse:collapse;font-size:0.78rem">
+      <thead><tr style="background:#6d28d9;color:#fff">
+        <th style="padding:4px 8px">#</th>
+        <th style="padding:4px 8px">Field</th>
+        <th style="padding:4px 8px">Prompt</th>
+        <th style="padding:4px 8px">Validation</th>
+        <th style="padding:4px 8px">Req</th>
+        <th style="padding:4px 8px">Clr</th>
+      </tr></thead>
+      <tbody>${tableRows}</tbody>
+    </table>`;
+  document.getElementById('detail-content').appendChild(extra);
+}
 
 async function showCompareDetail(r, tr) {
   document.querySelectorAll('tbody tr.selected').forEach(el => el.classList.remove('selected'));
@@ -674,16 +759,16 @@ function showDetail(r, tr) {
   tr.classList.add('selected');
   document.getElementById('detail-title').textContent = `Seq ${r.sequence}: ${r.action_type_name}`;
   document.getElementById('detail-content').innerHTML = [
-    ['Process',     r.process_name],
+    ['Process',     esc(r.process_name)],
     ['Sequence',    r.sequence],
-    ['Label',       r.label],
-    ['Action Type', r.action_type_name],
-    ['Action Name', r.action_name],
+    ['Label',       esc(r.label)],
+    ['Action Type', esc(r.action_type_name)],
+    ['Action Name', esc(r.action_name)],
     ['On Pass',     makePassFail(r.pass_label, r)],
     ['On Fail',     makePassFail(r.fail_label, r)],
     ['Commented',   r.commented_out ? '⚠ Yes' : 'No'],
-    ['Action ID',   `<span style="font-size:0.75rem">${r.action_id||''}</span>`],
-    ['Process ID',  `<span style="font-size:0.75rem">${r.process_id||''}</span>`],
+    ['Action ID',   `<span style="font-size:0.75rem">${esc(r.action_id)}</span>`],
+    ['Process ID',  `<span style="font-size:0.75rem">${esc(r.process_id)}</span>`],
   ].map(([l,v]) => `<div class="detail-row"><span class="detail-label">${l}</span><span class="detail-val">${v||'—'}</span></div>`).join('');
   document.getElementById('detail-panel').style.display = 'block';
 }
