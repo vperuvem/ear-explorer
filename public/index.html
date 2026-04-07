@@ -25,6 +25,35 @@
   #btn-back { background: #ede9fe; color: #6d28d9; display: none; border: none; }
   #btn-back:hover { background: #ddd6fe; }
 
+  /* Scope multi-select dropdown */
+  .scope-wrap { position: relative; display: inline-block; }
+  .scope-btn  { background: #f5f3ff; border: 1.5px solid #c4b5fd; color: #1e1b4b;
+                padding: 5px 10px; border-radius: 6px; font-size: 0.88rem; height: 32px;
+                cursor: pointer; white-space: nowrap; user-select: none; }
+  .scope-btn:hover { border-color: #7c3aed; }
+  .scope-menu { display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 300;
+                background: #ffffff; border: 1.5px solid #c4b5fd; border-radius: 8px;
+                box-shadow: 0 6px 18px rgba(124,58,237,0.18); min-width: 230px; padding: 4px 0; }
+  .scope-menu.open { display: block; }
+  .scope-option { display: flex; align-items: center; gap: 9px; padding: 7px 14px;
+                  cursor: pointer; font-size: 0.83rem; color: #1e1b4b; }
+  .scope-option:hover { background: #ede9fe; }
+  .scope-option input[type=checkbox] { cursor: pointer; accent-color: #7c3aed; width: 14px; height: 14px; }
+  .scope-option .scope-label { font-weight: 600; }
+  .scope-option .scope-sub   { font-size: 0.73rem; color: #6b7280; margin-left: auto; }
+  .scope-section { padding: 6px 14px 2px; font-size: 0.68rem; font-weight: 700;
+                   color: #7c3aed; text-transform: uppercase; letter-spacing: 0.06em; }
+  .scope-divider { border: none; border-top: 1px solid #e9d5ff; margin: 4px 0; }
+
+  /* Match-type badge on proc list items */
+  .match-badge { font-size: 0.7rem; font-weight: 700; padding: 2px 7px; border-radius: 4px;
+                 white-space: nowrap; margin-top: 3px; }
+  .mb-process  { background: #d1fae5; color: #065f46; }
+  .mb-action   { background: #dbeafe; color: #1e40af; }
+  .mb-db       { background: #fef9c3; color: #854d0e; }
+  .mb-calc     { background: #e0f2fe; color: #075985; }
+  .mb-compare  { background: #fce7f3; color: #9d174d; }
+
 
 
 
@@ -36,11 +65,14 @@
                     transition: transform 0.1s, box-shadow 0.1s;
                     box-shadow: 0 2px 8px rgba(124,58,237,0.10); }
   .proc-list-item:hover { transform: translateX(3px); box-shadow: 0 4px 16px rgba(124,58,237,0.22); }
+
   .proc-list-icon { font-size: 1.1rem; }
   .proc-list-name { font-weight: 600; color: #000000; font-size: 0.95rem; }
   .proc-list-desc { font-size: 0.8rem; color: #000000; margin-top: 2px; }
-  .proc-list-version { margin-left: auto; font-size: 0.75rem; color: #000000;
+  .proc-list-version { font-size: 0.75rem; color: #000000;
                        background: #ede9fe; border-radius: 4px; padding: 2px 8px; font-weight: 600; }
+  .proc-list-right   { margin-left: auto; display: flex; flex-direction: column;
+                       align-items: flex-end; gap: 3px; }
 
   .grid-wrap { overflow: auto; padding: 16px 24px; }
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem;
@@ -132,26 +164,33 @@
 
 <header>
   <h1>⚙️ HighJump EAR Explorer</h1>
-  <input id="inp-process" type="text" placeholder="Process name…" value="menu" style="width:185px"/>
+  <input id="inp-process" type="text" placeholder="Search term…" value="menu" style="width:185px"/>
   <input id="inp-app"     type="text" placeholder="Application"   value="WA"   style="width:65px"/>
-  <select id="inp-type" style="width:130px">
-    <option value="">All action types</option>
-    <option value="1">Process</option>
-    <option value="3">Calculate</option>
-    <option value="4">Compare</option>
-    <option value="5">Database</option>
-    <option value="6">Dialog</option>
-    <option value="7">Execute</option>
-    <option value="9">List</option>
-    <option value="11">Receive</option>
-    <option value="12">Report</option>
-    <option value="13">Send</option>
-    <option value="14">User</option>
-    <option value="-1">Comment</option>
-  </select>
+
+  <!-- Combined options dropdown -->
+  <div class="scope-wrap" id="scope-wrap">
+    <button class="scope-btn" id="scope-btn" type="button" onclick="toggleScopeMenu()">🔎 Options ▾</button>
+    <div class="scope-menu" id="scope-menu">
+      <label class="scope-option"><input type="checkbox" class="type-cb" value="1" checked/> <span class="scope-label">Process</span>        <span class="scope-sub">Name</span></label>
+      <label class="scope-option"><input type="checkbox" class="type-cb" value="3"/>          <span class="scope-label">Calculate</span>       <span class="scope-sub">Name · Expression</span></label>
+      <label class="scope-option"><input type="checkbox" class="type-cb" value="4"/>          <span class="scope-label">Compare</span>         <span class="scope-sub">Name · Operand</span></label>
+      <label class="scope-option"><input type="checkbox" class="type-cb" value="5"/>          <span class="scope-label">Database</span>        <span class="scope-sub">Name · SQL</span></label>
+      <label class="scope-option"><input type="checkbox" class="type-cb" value="6"/>          <span class="scope-label">Dialog / Screen</span> <span class="scope-sub">Name · Label</span></label>
+      <label class="scope-option"><input type="checkbox" class="type-cb" value="7"/>          <span class="scope-label">Execute</span>         <span class="scope-sub">Name · Label</span></label>
+      <label class="scope-option"><input type="checkbox" class="type-cb" value="9"/>          <span class="scope-label">List</span>            <span class="scope-sub">Name · Label</span></label>
+      <label class="scope-option"><input type="checkbox" class="type-cb" value="11"/>         <span class="scope-label">Receive</span>         <span class="scope-sub">Name · Message</span></label>
+      <label class="scope-option"><input type="checkbox" class="type-cb" value="13"/>         <span class="scope-label">Send</span>            <span class="scope-sub">Name · Message</span></label>
+      <label class="scope-option"><input type="checkbox" class="type-cb" value="14"/>         <span class="scope-label">User</span>            <span class="scope-sub">Name</span></label>
+      <label class="scope-option"><input type="checkbox" class="type-cb" value="-1"/>         <span class="scope-label">Comment</span>         <span class="scope-sub">Comment text</span></label>
+    </div>
+  </div>
   <button onclick="loadData()">🔍 Search</button>
   <button id="btn-back" onclick="goBack()">← Back</button>
-  <span style="margin-left:auto; font-size:0.8rem; color:#94a3b8; font-weight:500; white-space:nowrap;">ArcadiaWHJSqlStage · EAR</span>
+  <select id="inp-server" style="margin-left:auto; font-size:0.8rem; border:1.5px solid #c4b5fd;
+          border-radius:6px; padding:3px 8px; background:#f5f3ff; color:#1e1b4b; font-weight:600; cursor:pointer;">
+    <option value="ArcadiaWHJSqlStage" selected>ArcadiaWHJSqlStage</option>
+    <option value="BrandonRhjSqlDev">BrandonRhjSqlDev</option>
+  </select>
 </header>
 
 
@@ -201,12 +240,36 @@ let navStack = [];  // history stack
 
 
 
+function getServer() { return document.getElementById('inp-server').value; }
+
+// Scope dropdown toggle
+function toggleScopeMenu() {
+  document.getElementById('scope-menu').classList.toggle('open');
+}
+// Close scope menu when clicking outside
+document.addEventListener('click', e => {
+  if (!document.getElementById('scope-wrap').contains(e.target))
+    document.getElementById('scope-menu').classList.remove('open');
+});
+// Keep label on Options button in sync with checked type boxes
+function updateScopeBtn() {
+  const labels = [...document.querySelectorAll('.type-cb:checked')]
+    .map(cb => cb.closest('label').querySelector('.scope-label').textContent.trim());
+  document.getElementById('scope-btn').textContent =
+    '🔎 ' + (labels.length ? labels.join(' · ') : 'Filter') + ' ▾';
+}
+// Type checkboxes → update button label only (these control search scope, not display filter)
+document.querySelectorAll('.type-cb').forEach(cb =>
+  cb.addEventListener('change', updateScopeBtn));
+
 // Search — shows list of matching process objects
 async function loadData() {
   const process = document.getElementById('inp-process').value.trim();
   const app     = document.getElementById('inp-app').value.trim();
+  const types   = [...document.querySelectorAll('.type-cb:checked')].map(cb => cb.value);
+  const scope   = types.length ? types.join(',') : '1';
   try {
-    const res = await fetch(`/api/search?process=${encodeURIComponent(process)}&application=${encodeURIComponent(app)}`);
+    const res = await fetch(`/api/search?process=${encodeURIComponent(process)}&application=${encodeURIComponent(app)}&scope=${encodeURIComponent(scope)}&server=${encodeURIComponent(getServer())}`);
     searchList = await res.json();
     if (searchList.error) throw new Error(searchList.error);
     viewMode = 'list';
@@ -239,7 +302,7 @@ async function openProcess(processId, processName, pushToStack) {
   // Update search box to exact name of the clicked process
   document.getElementById('inp-process').value = processName;
   try {
-    const res = await fetch(`/api/process/${encodeURIComponent(processId)}?application=${encodeURIComponent(app)}`);
+    const res = await fetch(`/api/process/${encodeURIComponent(processId)}?application=${encodeURIComponent(app)}&server=${encodeURIComponent(getServer())}`);
     allRows = await res.json();
     if (allRows.error) throw new Error(allRows.error);
     viewMode = 'detail';
@@ -258,17 +321,30 @@ function renderProcessList() {
     container.innerHTML = '<p style="color:#8892a4;padding:12px">No matching processes found.</p>';
     return;
   }
+  // match_type is now the action_type number string ('1','3','4','5',…)
+  // Map directly to ACTION_COLORS and ACTION_LABELS used in the drilldown
+  const matchColor = t => ACTION_COLORS[t] || '#f4f6fb';
+  const matchLabel = t => ACTION_LABELS[t] || '';
   // Use data attributes to avoid quote-escaping issues in onclick
-  container.innerHTML = searchList.map(p => `
-    <div class="proc-list-item" data-id="${esc(p.id)}">
+  container.innerHTML = searchList.map(p => {
+    const bg         = matchColor(p.match_type);
+    const isProcess  = p.match_type === '1';
+    const primaryTxt = esc(p.action_name || p.name);
+    // For action-type results show the parent process name as sub-line; for process results show description
+    const subLine    = isProcess
+      ? (p.description ? `<div class="proc-list-desc">${esc(p.description)}</div>` : '')
+      : `<div class="proc-list-desc">📋 ${esc(p.name)}</div>`;
+    return `
+    <div class="proc-list-item" data-id="${esc(p.id)}"
+         style="background:${bg}; border-left-color:${bg};">
       <span class="proc-list-icon">⚙️</span>
       <div>
-        <div class="proc-list-name">${esc(p.name)}</div>
-        ${p.description ? `<div class="proc-list-desc">${esc(p.description)}</div>` : ''}
+        <div class="proc-list-name">${primaryTxt}</div>
+        ${subLine}
       </div>
-      <span class="proc-list-version">v${esc(p.version)}</span>
-    </div>
-  `).join('');
+      ${p.match_type ? `<div class="proc-list-right"><span class="match-badge">${esc(matchLabel(p.match_type))}</span></div>` : ''}
+    </div>`;
+  }).join('');
   // Attach click handlers after rendering using the data-id to look up the process
   container.querySelectorAll('.proc-list-item').forEach((el, i) => {
     el.addEventListener('click', () => openProcess(searchList[i].id, searchList[i].name, true));
@@ -412,12 +488,7 @@ function sortBy(col) {
 }
 
 function renderTable() {
-  const filterType = document.getElementById('inp-type').value;
-
-  let rows = allRows.filter(r => {
-    if (filterType && String(r.action_type) !== filterType) return false;
-    return true;
-  });
+  let rows = allRows.slice();
 
   rows.sort((a, b) => {
     // Primary: process_name always
@@ -523,7 +594,7 @@ async function showCallers(processName) {
   updateBackButton();
   closeDetail();
   try {
-    const res = await fetch(`/api/caller-objects?childProcess=${encodeURIComponent(processName)}&application=${encodeURIComponent(app)}`);
+    const res = await fetch(`/api/caller-objects?childProcess=${encodeURIComponent(processName)}&application=${encodeURIComponent(app)}&server=${encodeURIComponent(getServer())}`);
     const callers = await res.json();
     if (callers.error) throw new Error(callers.error);
     if (!callers.length) { alert(`No processes call "${processName}".`); goBack(); return; }
@@ -539,7 +610,7 @@ async function showCallers(processName) {
 
 async function showDialogDetail(r, tr) {
   showDetail(r, tr);
-  const res  = await fetch(`/api/dialog-action/${encodeURIComponent(r.action_id)}`);
+  const res  = await fetch(`/api/dialog-action/${encodeURIComponent(r.action_id)}?server=${encodeURIComponent(getServer())}`);
   const rows = await res.json();
   if (!rows.length) return;
   const d = rows[0];
@@ -578,7 +649,7 @@ async function showCompareDetail(r, tr) {
   document.getElementById('detail-content').innerHTML = '<p style="color:#8892a4;font-size:0.83rem">Loading…</p>';
   document.getElementById('detail-panel').style.display = 'block';
   try {
-    const res  = await fetch(`/api/compare-action/${encodeURIComponent(r.action_id)}`);
+    const res  = await fetch(`/api/compare-action/${encodeURIComponent(r.action_id)}?server=${encodeURIComponent(getServer())}`);
     const rows = await res.json();
     if (!rows.length) {
       document.getElementById('detail-content').innerHTML = '<p style="color:#f38ba8">No detail found.</p>';
@@ -613,7 +684,7 @@ async function showCalcDetail(r, tr) {
   document.getElementById('detail-content').innerHTML = '<p style="color:#8892a4;font-size:0.83rem">Loading…</p>';
   document.getElementById('detail-panel').style.display = 'block';
   try {
-    const res  = await fetch(`/api/calc-action/${encodeURIComponent(r.action_id)}`);
+    const res  = await fetch(`/api/calc-action/${encodeURIComponent(r.action_id)}?server=${encodeURIComponent(getServer())}`);
     const rows = await res.json();
     if (!rows.length) {
       document.getElementById('detail-content').innerHTML = '<p style="color:#f38ba8">No detail found.</p>';
@@ -702,7 +773,7 @@ async function showDbDetail(r, tr) {
   document.getElementById('detail-content').innerHTML = '<p style="color:#8892a4;font-size:0.83rem">Loading statement…</p>';
   document.getElementById('detail-panel').style.display = 'block';
   try {
-    const res  = await fetch(`/api/db-action/${encodeURIComponent(r.action_id)}`);
+    const res  = await fetch(`/api/db-action/${encodeURIComponent(r.action_id)}?server=${encodeURIComponent(getServer())}`);
     const rows = await res.json();
     if (!rows.length) {
       document.getElementById('detail-content').innerHTML = '<p style="color:#f38ba8">No statement found.</p>';
@@ -728,7 +799,7 @@ async function showListDetail(r, tr) {
   document.getElementById('detail-content').innerHTML = '<p style="color:#8892a4;font-size:0.83rem">Loading…</p>';
   document.getElementById('detail-panel').style.display = 'block';
   try {
-    const res  = await fetch(`/api/list-action/${encodeURIComponent(r.action_id)}`);
+    const res  = await fetch(`/api/list-action/${encodeURIComponent(r.action_id)}?server=${encodeURIComponent(getServer())}`);
     const rows = await res.json();
     if (!rows.length) {
       document.getElementById('detail-content').innerHTML = '<p style="color:#f38ba8">No detail found.</p>';
@@ -779,7 +850,6 @@ function closeDetail() {
 }
 
 document.getElementById('inp-process').addEventListener('keydown', e => { if(e.key==='Enter') loadData(); });
-document.getElementById('inp-type').addEventListener('change', renderTable);
 
 loadData();
 </script>
