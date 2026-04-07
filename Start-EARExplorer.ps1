@@ -1,13 +1,14 @@
 # EAR Explorer - PowerShell HTTP Server
-$Port      = 3000
-$Server    = 'ArcadiaWHJSqlStage'
-$Database  = 'EAR'
-$IndexHtml = Join-Path $PSScriptRoot 'public\index.html'
-$ConnStr   = "Server=$Server;Database=$Database;Integrated Security=True;TrustServerCertificate=True"
+$Port              = 3000
+$Database          = 'EAR'
+$IndexHtml         = Join-Path $PSScriptRoot 'public\index.html'
+$AllowedServers    = @('ArcadiaWHJSqlStage','BrandonRhjSqlDev')
+$script:CurrentServer = 'ArcadiaWHJSqlStage'   # updated per-request
 
 # Raw query helper — returns an array of hashtables (no JSON conversion)
 function Invoke-SqlRaw($sql, $params = @{}) {
-    $conn = New-Object System.Data.SqlClient.SqlConnection $ConnStr
+    $connStr = "Server=$script:CurrentServer;Database=$Database;Integrated Security=True;TrustServerCertificate=True"
+    $conn = New-Object System.Data.SqlClient.SqlConnection $connStr
     $conn.Open()
     $cmd = $conn.CreateCommand()
     $cmd.CommandText = $sql
@@ -130,20 +131,126 @@ while ($listener.IsListening) {
         $path = $req.Url.AbsolutePath
         $qs   = $req.QueryString
 
+        # Resolve server — only allow known servers to prevent injection
+        $reqServer = $qs['server']
+        $script:CurrentServer = if ($reqServer -and $AllowedServers -contains $reqServer) { $reqServer } else { 'ArcadiaWHJSqlStage' }
+
         if ($path -eq '/' -or $path -eq '/index.html') {
             $html = [System.IO.File]::ReadAllBytes($IndexHtml)
             $resp.ContentType = 'text/html'
             $resp.OutputStream.Write($html, 0, $html.Length)
 
         } elseif ($path -eq '/api/search') {
-            # Returns list of matching process objects
-            $proc = if ($qs['process']) { $qs['process'] } else { '' }
-            $app  = if ($qs['application']) { $qs['application'] } else { 'WA' }
-            $sql  = "SELECT CAST(m.id AS NVARCHAR(36)) AS id, m.name, m.description, m.version
-                     FROM t_app_process_object m (NOLOCK)
-                     JOIN t_application_development a (NOLOCK) ON m.application_id = a.application_id
-                     WHERE a.name = @app AND lower(m.name) LIKE '%' + lower(@proc) + '%'
-                     ORDER BY m.name"
+            # scope = comma-separated action_type numbers (1=Process,3=Calc,4=Compare,5=DB,6=Dialog,7=Execute,9=List,11=Receive,13=Send,14=User,-1=Comment)
+            $proc  = if ($qs['process'])     { $qs['process'] }     else { '' }
+            $app   = if ($qs['application']) { $qs['application'] } else { 'WA' }
+            $scope = if ($qs['scope'])       { $qs['scope'] }       else { '1' }
+            $types = $scope -split ','
+            # S = base SELECT columns (action_name added per-part since source differs by type)
+            $S = "SELECT DISTINCT CAST(m.id AS NVARCHAR(36)) AS id, m.name, m.description, m.version"
+            $J = "FROM t_app_process_object m (NOLOCK) JOIN t_application_development a (NOLOCK) ON m.application_id = a.application_id"
+            $W = "WHERE a.name = @app"
+            $parts = @()
+
+            # Type 1 — Process: action_name = process name
+            if ($types -contains '1') {
+                $parts += "$S, '1' AS match_type, m.name AS action_name $J $W AND lower(m.name) LIKE '%'+lower(@proc)+'%'"
+            }
+
+            # Type 3 — Calculate: JOIN action table to get name; also search expression variables
+            if ($types -contains '3') {
+                $parts += "$S, '3' AS match_type, c.name AS action_name
+                           $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=3 AND d.commented_out=0
+                               JOIN t_act_calculate c (NOLOCK) ON c.id=d.action_id
+                           $W AND (lower(c.name) LIKE '%'+lower(@proc)+'%'
+                               OR d.action_id IN (SELECT DISTINCT cd.id FROM t_act_calculate_detail cd (NOLOCK)
+                                   LEFT JOIN t_app_field    f1 (NOLOCK) ON cd.operand1_type=17 AND cd.operand1_id=f1.id
+                                   LEFT JOIN t_app_field    f2 (NOLOCK) ON cd.operand2_type=17 AND cd.operand2_id=f2.id
+                                   LEFT JOIN t_app_field    rf (NOLOCK) ON cd.result_type=17   AND cd.result_id=rf.id
+                                   LEFT JOIN t_app_constant c1 (NOLOCK) ON cd.operand1_type=18 AND cd.operand1_id=c1.id
+                                   LEFT JOIN t_app_constant c2 (NOLOCK) ON cd.operand2_type=18 AND cd.operand2_id=c2.id
+                                   WHERE lower(ISNULL(f1.name,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(f2.name,'')) LIKE '%'+lower(@proc)+'%'
+                                      OR lower(ISNULL(rf.name,'')) LIKE '%'+lower(@proc)+'%'
+                                      OR lower(ISNULL(c1.data_string,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(c2.data_string,'')) LIKE '%'+lower(@proc)+'%'))"
+            }
+
+            # Type 4 — Compare: JOIN action table; also search operand field/constant names
+            if ($types -contains '4') {
+                $parts += "$S, '4' AS match_type, c.name AS action_name
+                           $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=4 AND d.commented_out=0
+                               JOIN t_act_compare c (NOLOCK) ON c.id=d.action_id
+                           $W AND (lower(c.name) LIKE '%'+lower(@proc)+'%'
+                               OR d.action_id IN (SELECT cmp.id FROM t_act_compare cmp (NOLOCK)
+                                   LEFT JOIN t_app_field    f1 (NOLOCK) ON cmp.operand1_type=17 AND cmp.operand1_id=f1.id
+                                   LEFT JOIN t_app_field    f2 (NOLOCK) ON cmp.operand2_type=17 AND cmp.operand2_id=f2.id
+                                   LEFT JOIN t_app_constant c1 (NOLOCK) ON cmp.operand1_type=18 AND cmp.operand1_id=c1.id
+                                   LEFT JOIN t_app_constant c2 (NOLOCK) ON cmp.operand2_type=18 AND cmp.operand2_id=c2.id
+                                   WHERE lower(ISNULL(f1.name,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(f2.name,'')) LIKE '%'+lower(@proc)+'%'
+                                      OR lower(ISNULL(c1.data_string,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(c2.data_string,'')) LIKE '%'+lower(@proc)+'%'))"
+            }
+
+            # Type 5 — Database: JOIN action table; also search SQL statement
+            if ($types -contains '5') {
+                $parts += "$S, '5' AS match_type, c.name AS action_name
+                           $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=5 AND d.commented_out=0
+                               JOIN t_act_database c (NOLOCK) ON c.id=d.action_id
+                           $W AND (lower(c.name) LIKE '%'+lower(@proc)+'%'
+                               OR EXISTS (SELECT 1 FROM t_act_database_detail dd (NOLOCK) WHERE dd.id=d.action_id AND lower(CAST(dd.statement AS NVARCHAR(MAX))) LIKE '%'+lower(@proc)+'%'))"
+            }
+
+            # Type 6 — Dialog: JOIN action table; also search step label
+            if ($types -contains '6') {
+                $parts += "$S, '6' AS match_type, c.name AS action_name
+                           $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=6 AND d.commented_out=0
+                               JOIN t_act_dialog c (NOLOCK) ON c.id=d.action_id
+                           $W AND (lower(c.name) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%')"
+            }
+
+            # Type 7 — Execute: action_name = step label
+            if ($types -contains '7') {
+                $parts += "$S, '7' AS match_type, d.label AS action_name
+                           $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=7 AND d.commented_out=0
+                           $W AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'"
+            }
+
+            # Type 9 — List: JOIN action table; also search step label
+            if ($types -contains '9') {
+                $parts += "$S, '9' AS match_type, c.name AS action_name
+                           $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=9 AND d.commented_out=0
+                               JOIN t_act_list c (NOLOCK) ON c.id=d.action_id
+                           $W AND (lower(c.name) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%')"
+            }
+
+            # Type 11 — Receive: action_name = step label (message name)
+            if ($types -contains '11') {
+                $parts += "$S, '11' AS match_type, d.label AS action_name
+                           $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=11 AND d.commented_out=0
+                           $W AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'"
+            }
+
+            # Type 13 — Send: action_name = step label (message name)
+            if ($types -contains '13') {
+                $parts += "$S, '13' AS match_type, d.label AS action_name
+                           $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=13 AND d.commented_out=0
+                           $W AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'"
+            }
+
+            # Type 14 — User: action_name = step label
+            if ($types -contains '14') {
+                $parts += "$S, '14' AS match_type, d.label AS action_name
+                           $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=14 AND d.commented_out=0
+                           $W AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'"
+            }
+
+            # Type -1 — Comment: action_name = comment text
+            if ($types -contains '-1') {
+                $parts += "$S, '-1' AS match_type, d.label AS action_name
+                           $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.commented_out=1
+                           $W AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'"
+            }
+
+            if ($parts.Count -eq 0) { $parts += "$S, '1' AS match_type, m.name AS action_name $J WHERE 1=0" }
+            $sql = ($parts -join " UNION ") + " ORDER BY action_name"
             Send-Json $resp (Invoke-Sql $sql @{ '@proc'=$proc; '@app'=$app })
 
         } elseif ($path -match '^/api/process/(.+)$') {
