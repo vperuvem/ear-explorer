@@ -1,5 +1,5 @@
 # EAR Explorer - PowerShell HTTP Server
-$Port              = 3000
+$Port              = 8080
 $Database          = 'EAR'
 $IndexHtml         = Join-Path $PSScriptRoot 'public\index.html'
 $AllowedServers    = @('ArcadiaWHJSqlStage','RetailRHjsqldev','RetailRHjsqlStage')
@@ -23,7 +23,7 @@ function Invoke-SqlRaw($sql, $params = @{}) {
         $obj = @{}
         foreach ($col in $table.Columns) {
             $v = $row[$col.ColumnName]
-            $obj[$col.ColumnName] = if ($v -is [DBNull]) { $null } else { $v }
+            $obj[$col.ColumnName] = if ($v -is [DBNull]) { $null } elseif ($v -is [string]) { $v -replace '[\x00-\x1F\x7F]', ' ' } else { $v }
         }
         $obj
     }
@@ -79,18 +79,23 @@ $DETAIL_JOINS = @"
 FROM t_app_process_object m (NOLOCK)
 JOIN t_app_process_object_detail d (NOLOCK) ON m.id = d.id AND d.version = m.version
 JOIN t_application_development a (NOLOCK)   ON m.application_id = a.application_id
-LEFT JOIN t_app_process_object po   (NOLOCK) ON d.action_type =  1 AND d.action_id = po.id
-LEFT JOIN t_act_calculate     calc  (NOLOCK) ON d.action_type =  3 AND d.action_id = calc.id
-LEFT JOIN t_act_compare       comp  (NOLOCK) ON d.action_type =  4 AND d.action_id = comp.id
-LEFT JOIN t_act_database      db    (NOLOCK) ON d.action_type =  5 AND d.action_id = db.id
-LEFT JOIN t_act_dialog        dlg   (NOLOCK) ON d.action_type =  6 AND d.action_id = dlg.id
-LEFT JOIN t_act_execute       exe   (NOLOCK) ON d.action_type =  7 AND d.action_id = exe.id
-LEFT JOIN t_act_list          lst   (NOLOCK) ON d.action_type =  9 AND d.action_id = lst.id
-LEFT JOIN t_act_send          snd   (NOLOCK) ON d.action_type = 13 AND d.action_id = snd.id
-LEFT JOIN t_act_user          usr   (NOLOCK) ON d.action_type = 14 AND d.action_id = usr.id
-LEFT JOIN t_act_receive       rcv   (NOLOCK) ON d.action_type = 11 AND d.action_id = rcv.id
-LEFT JOIN t_act_report        rpt   (NOLOCK) ON d.action_type = 12 AND d.action_id = rpt.id
-LEFT JOIN t_app_record        rec   (NOLOCK) ON d.action_type = 19 AND d.action_id = rec.id
+LEFT JOIN t_app_process_object po   (NOLOCK) ON d.action_type =  1 AND d.action_id = po.id   AND po.version   = m.version
+LEFT JOIN t_act_calculate     calc  (NOLOCK) ON d.action_type =  3 AND d.action_id = calc.id AND calc.version = m.version
+LEFT JOIN t_act_compare       comp  (NOLOCK) ON d.action_type =  4 AND d.action_id = comp.id AND comp.version = m.version
+LEFT JOIN t_act_database      db    (NOLOCK) ON d.action_type =  5 AND d.action_id = db.id   AND db.version   = m.version
+LEFT JOIN t_act_dialog        dlg   (NOLOCK) ON d.action_type =  6 AND d.action_id = dlg.id  AND dlg.version  = m.version
+LEFT JOIN t_act_execute       exe   (NOLOCK) ON d.action_type =  7 AND d.action_id = exe.id  AND exe.version  = m.version
+LEFT JOIN t_act_list          lst   (NOLOCK) ON d.action_type =  9 AND d.action_id = lst.id  AND lst.version  = m.version
+LEFT JOIN t_act_send          snd   (NOLOCK) ON d.action_type = 13 AND d.action_id = snd.id  AND snd.version  = m.version
+LEFT JOIN t_act_user          usr   (NOLOCK) ON d.action_type = 14 AND d.action_id = usr.id  AND usr.version  = m.version
+LEFT JOIN t_act_receive       rcv   (NOLOCK) ON d.action_type = 11 AND d.action_id = rcv.id  AND rcv.version  = m.version
+LEFT JOIN t_act_report        rpt   (NOLOCK) ON d.action_type = 12 AND d.action_id = rpt.id  AND rpt.version  = m.version
+LEFT JOIN t_app_record        rec   (NOLOCK) ON d.action_type = 19 AND d.action_id = rec.id  AND rec.version  = m.version
+
+LEFT JOIN t_act_publish       pub   (NOLOCK) ON d.action_type = 10 AND d.action_id = pub.id  AND pub.version  = m.version
+LEFT JOIN t_app_locale        loc   (NOLOCK) ON d.action_type = 16 AND d.action_id = loc.id  AND loc.version  = m.version
+LEFT JOIN t_app_field         fld   (NOLOCK) ON d.action_type = 17 AND d.action_id = fld.id  AND fld.version  = m.version
+LEFT JOIN t_app_constant      con   (NOLOCK) ON d.action_type = 18 AND d.action_id = con.id
 "@
 
 $DETAIL_COLS = @"
@@ -100,11 +105,13 @@ SELECT DISTINCT m.name AS process_name, d.sequence, d.label,
         WHEN  5 THEN 'Database'   WHEN  6 THEN 'Dialog'     WHEN  7 THEN 'Execute'
         WHEN  9 THEN 'List'       WHEN 11 THEN 'Receive'    WHEN 12 THEN 'Report'
         WHEN 13 THEN 'Send'       WHEN 14 THEN 'User'       WHEN 19 THEN 'Record'
+        WHEN  8 THEN 'Label'      WHEN 10 THEN 'Publish'    WHEN 16 THEN 'Locale'
+        WHEN 17 THEN 'Field'      WHEN 18 THEN 'Constant'
         WHEN -1 THEN 'Comment'
-        ELSE 'Unknown (' + CAST(d.action_type AS VARCHAR) + ')'
     END AS action_type_name, d.action_type,
     COALESCE(po.name,calc.name,comp.name,db.name,dlg.name,exe.name,
              lst.name,snd.name,usr.name,rcv.name,rpt.name,rec.name,
+             pub.name,loc.name,fld.name,COALESCE(con.data_string,CAST(con.data_number AS NVARCHAR(50)),CAST(con.data_datetime AS NVARCHAR(50))),
              d.comments) AS action_name,
     d.pass_label, d.fail_label, d.commented_out,
     CAST(d.action_id AS NVARCHAR(36)) AS action_id,
@@ -112,6 +119,8 @@ SELECT DISTINCT m.name AS process_name, d.sequence, d.label,
 "@
 
 function Send-Json($resp, $json) {
+    $json = [regex]::Replace($json, '[\x00-\x1F\x7F]', '')
+    $json | Out-File 'C:\Users\PVenkatesh\Downloads\ear-tester\_json_log.txt' -Encoding UTF8 -Append
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
     $resp.ContentType = 'application/json; charset=utf-8'
     $resp.OutputStream.Write($bytes, 0, $bytes.Length)
@@ -468,7 +477,9 @@ while ($listener.IsListening) {
             $resp.StatusCode = 404
         }
     } catch {
-        $msg   = $_.Exception.Message -replace '"','\"'
+        $msg = $_.Exception.Message
+        $msg | Add-Content 'C:\Users\PVenkatesh\Downloads\ear-tester\_json_log.txt'
+        $msg = [regex]::Replace($msg, '[\x00-\x1F\x7F]', ' ') -replace '"','\"'
         $bytes = [System.Text.Encoding]::UTF8.GetBytes("{`"error`":`"$msg`"}")
         $resp.ContentType = 'application/json'
         $resp.StatusCode  = 500
