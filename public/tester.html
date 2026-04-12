@@ -35,14 +35,10 @@
           box-shadow: 0 4px 20px rgba(67,56,202,0.10); border-left: 4px solid #7c3aed; }
   .card h2 { font-size: 1rem; color: #6d28d9; margin-bottom: 12px; }
   .controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px;
-                  border-radius: 12px; font-size: 0.82rem; font-weight: 700; }
-  .status-idle    { background: #d1fae5; color: #065f46; }
-  .status-running { background: #fef9c3; color: #854d0e; }
   .entry-label { font-size: 0.83rem; font-weight: 700; color: #374151; white-space: nowrap; }
   .entry-select { background: #f5f3ff; border: 1.5px solid #c4b5fd; color: #1e1b4b;
-                  padding: 4px 10px; border-radius: 6px; font-size: 0.83rem; min-width: 260px;
-                  max-width: 420px; outline: none; height: 32px; }
+                  padding: 4px 10px; border-radius: 6px; font-size: 0.83rem;
+                  width: auto; outline: none; height: 32px; }
   .entry-select:focus { border-color: #7c3aed; box-shadow: 0 0 0 2px rgba(124,58,237,0.18); }
 
   /* Summary row */
@@ -79,8 +75,14 @@
 
 <header>
   <h1>🧪 HighJump EAR Tester</h1>
-  <a class="nav-link" href="http://localhost:9000" target="_blank">⚙️ EAR Explorer</a>
-  <span id="status-badge" class="status-badge status-idle">● Idle</span>
+  <span class="entry-label">Application:</span>
+  <select id="inp-entry" class="entry-select">
+    <option value="">— loading… —</option>
+  </select>
+  <button id="btn-run" onclick="runTests()">▶ Run Tests</button>
+  <button onclick="loadResults()" style="background:#ede9fe;color:#6d28d9;border:1.5px solid #c4b5fd;">⟳ Refresh</button>
+  <a id="report-link" href="#" target="_blank" class="nav-link">📊 Report</a>
+  <a class="nav-link" href="http://localhost:9000" target="_blank">Explorer</a>
   <select id="inp-server" style="margin-left:auto; font-size:0.8rem; border:1.5px solid #c4b5fd;
           border-radius:6px; padding:3px 8px; background:#f5f3ff; color:#1e1b4b; font-weight:600;">
     <option value="ArcadiaWHJSqlStage" selected>ArcadiaWHJSqlStage</option>
@@ -90,21 +92,6 @@
 </header>
 
 <div class="content">
-
-  <div class="card">
-    <div class="controls">
-      <span class="entry-label">Application:</span>
-      <select id="inp-entry" class="entry-select">
-        <option value="">— loading… —</option>
-      </select>
-      <button onclick="runTests()">▶ Run Tests</button>
-      <button onclick="loadResults()" style="background:#ede9fe;color:#6d28d9;border:1.5px solid #c4b5fd;">⟳ Refresh Results</button>
-      <a id="report-link" href="#" target="_blank"
-         style="background:#ede9fe;color:#6d28d9;border:1.5px solid #c4b5fd;padding:5px 12px;
-                border-radius:6px;font-size:0.83rem;font-weight:600;text-decoration:none;height:32px;
-                display:inline-flex;align-items:center;">📊 HTML Report</a>
-    </div>
-  </div>
 
   <div class="summary">
     <div class="stat-box"><div class="num pass-num" id="stat-pass">—</div><div class="lbl">PASSED</div></div>
@@ -184,9 +171,9 @@ async function checkStatus() {
 }
 
 function setRunning(on) {
-  const b = document.getElementById('status-badge');
-  b.className = 'status-badge ' + (on ? 'status-running' : 'status-idle');
-  b.innerHTML = on ? '<span class="spinner"></span> Running…' : '● Idle';
+  const btn = document.getElementById('btn-run');
+  btn.disabled = on;
+  btn.innerHTML = on ? '<span class="spinner"></span> Running…' : '▶ Run Tests';
 }
 
 async function loadResults() {
