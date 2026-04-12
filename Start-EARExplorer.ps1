@@ -1,11 +1,11 @@
-# EAR Explorer - PowerShell HTTP Server
-$Port              = 8080
+﻿# EAR Explorer - PowerShell HTTP Server
+$Port              = 7777
 $Database          = 'EAR'
 $IndexHtml         = Join-Path $PSScriptRoot 'public\index.html'
 $AllowedServers    = @('ArcadiaWHJSqlStage','RetailRHjsqldev','RetailRHjsqlStage')
 $script:CurrentServer = 'ArcadiaWHJSqlStage'   # updated per-request
 
-# Raw query helper — returns an array of hashtables (no JSON conversion)
+# Raw query helper â€” returns an array of hashtables (no JSON conversion)
 function Invoke-SqlRaw($sql, $params = @{}) {
     $connStr = "Server=$script:CurrentServer;Database=$Database;Integrated Security=True;TrustServerCertificate=True"
     $conn = New-Object System.Data.SqlClient.SqlConnection $connStr
@@ -23,7 +23,7 @@ function Invoke-SqlRaw($sql, $params = @{}) {
         $obj = @{}
         foreach ($col in $table.Columns) {
             $v = $row[$col.ColumnName]
-            $obj[$col.ColumnName] = if ($v -is [DBNull]) { $null } elseif ($v -is [string]) { $v -replace '[\x00-\x1F\x7F]', ' ' } else { $v }
+            $obj[$col.ColumnName] = if ($v -is [DBNull]) { $null } else { $v }
         }
         $obj
     }
@@ -31,7 +31,7 @@ function Invoke-SqlRaw($sql, $params = @{}) {
     return @($rows)
 }
 
-# JSON wrapper — always returns a JSON array string
+# JSON wrapper â€” always returns a JSON array string
 function Invoke-Sql($sql, $params = @{}) {
     $rows = Invoke-SqlRaw $sql $params
     return ConvertTo-Json -InputObject @($rows) -Depth 3
@@ -77,7 +77,7 @@ function Resolve-Guids($rows) {
 
 $DETAIL_JOINS = @"
 FROM t_app_process_object m (NOLOCK)
-JOIN t_app_process_object_detail d (NOLOCK) ON m.id = d.id
+JOIN t_app_process_object_detail d (NOLOCK) ON m.id = d.id AND d.version = m.version
 JOIN t_application_development a (NOLOCK)   ON m.application_id = a.application_id
 LEFT JOIN t_app_process_object po   (NOLOCK) ON d.action_type =  1 AND d.action_id = po.id
 LEFT JOIN t_act_calculate     calc  (NOLOCK) ON d.action_type =  3 AND d.action_id = calc.id
@@ -104,13 +104,16 @@ SELECT DISTINCT m.name AS process_name, d.sequence, d.label,
         WHEN  5 THEN 'Database'   WHEN  6 THEN 'Dialog'     WHEN  7 THEN 'Execute'
         WHEN  9 THEN 'List'       WHEN 11 THEN 'Receive'    WHEN 12 THEN 'Report'
         WHEN 13 THEN 'Send'       WHEN 14 THEN 'User'       WHEN 19 THEN 'Record'
-        WHEN  8 THEN 'Label'      WHEN 10 THEN 'Publish'    WHEN 16 THEN 'Locale'
-        WHEN 17 THEN 'Field'      WHEN 18 THEN 'Constant'
+        WHEN  2 THEN 'Folder'     WHEN  8 THEN 'Label'      WHEN 10 THEN 'Publish'
+        WHEN 15 THEN 'DB Def'     WHEN 16 THEN 'Locale'     WHEN 17 THEN 'Field'
+        WHEN 18 THEN 'Constant'
         WHEN -1 THEN 'Comment'
+        ELSE 'Unknown (' + CAST(d.action_type AS VARCHAR) + ')'
     END AS action_type_name, d.action_type,
     COALESCE(po.name,calc.name,comp.name,db.name,dlg.name,exe.name,
              lst.name,snd.name,usr.name,rcv.name,rpt.name,rec.name,
-             pub.name,loc.name,fld.name,COALESCE(con.data_string,CAST(con.data_number AS NVARCHAR(50)),CAST(con.data_datetime AS NVARCHAR(50))),
+             pub.name,loc.name,fld.name,
+             COALESCE(con.data_string,CAST(con.data_number AS NVARCHAR(50)),CAST(con.data_datetime AS NVARCHAR(50))),
              d.comments) AS action_name,
     d.pass_label, d.fail_label, d.commented_out,
     CAST(d.action_id AS NVARCHAR(36)) AS action_id,
@@ -118,7 +121,6 @@ SELECT DISTINCT m.name AS process_name, d.sequence, d.label,
 "@
 
 function Send-Json($resp, $json) {
-    $json  = [regex]::Replace($json, '[\x00-\x1F\x7F]', '')
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
     $resp.ContentType = 'application/json; charset=utf-8'
     $resp.OutputStream.Write($bytes, 0, $bytes.Length)
@@ -138,7 +140,7 @@ while ($listener.IsListening) {
         $path = $req.Url.AbsolutePath
         $qs   = $req.QueryString
 
-        # Resolve server — only allow known servers to prevent injection
+        # Resolve server â€” only allow known servers to prevent injection
         $reqServer = $qs['server']
         $script:CurrentServer = if ($reqServer -and $AllowedServers -contains $reqServer) { $reqServer } else { 'ArcadiaWHJSqlStage' }
 
@@ -159,12 +161,12 @@ while ($listener.IsListening) {
             $W = "WHERE a.name = @app"
             $parts = @()
 
-            # Type 1 — Process: action_name = process name
+            # Type 1 â€” Process: action_name = process name
             if ($types -contains '1') {
                 $parts += "$S, '1' AS match_type, m.name AS action_name $J $W AND lower(m.name) LIKE '%'+lower(@proc)+'%'"
             }
 
-            # Type 3 — Calculate: JOIN action table to get name; also search expression variables
+            # Type 3 â€” Calculate: JOIN action table to get name; also search expression variables
             if ($types -contains '3') {
                 $parts += "$S, '3' AS match_type, c.name AS action_name
                            $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=3 AND d.commented_out=0
@@ -181,7 +183,7 @@ while ($listener.IsListening) {
                                       OR lower(ISNULL(c1.data_string,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(c2.data_string,'')) LIKE '%'+lower(@proc)+'%'))"
             }
 
-            # Type 4 — Compare: JOIN action table; also search operand field/constant names
+            # Type 4 â€” Compare: JOIN action table; also search operand field/constant names
             if ($types -contains '4') {
                 $parts += "$S, '4' AS match_type, c.name AS action_name
                            $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=4 AND d.commented_out=0
@@ -196,7 +198,7 @@ while ($listener.IsListening) {
                                       OR lower(ISNULL(c1.data_string,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(c2.data_string,'')) LIKE '%'+lower(@proc)+'%'))"
             }
 
-            # Type 5 — Database: JOIN action table; also search SQL statement
+            # Type 5 â€” Database: JOIN action table; also search SQL statement
             if ($types -contains '5') {
                 $parts += "$S, '5' AS match_type, c.name AS action_name
                            $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=5 AND d.commented_out=0
@@ -205,7 +207,7 @@ while ($listener.IsListening) {
                                OR EXISTS (SELECT 1 FROM t_act_database_detail dd (NOLOCK) WHERE dd.id=d.action_id AND lower(CAST(dd.statement AS NVARCHAR(MAX))) LIKE '%'+lower(@proc)+'%'))"
             }
 
-            # Type 6 — Dialog: JOIN action table; also search step label
+            # Type 6 â€” Dialog: JOIN action table; also search step label
             if ($types -contains '6') {
                 $parts += "$S, '6' AS match_type, c.name AS action_name
                            $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=6 AND d.commented_out=0
@@ -213,14 +215,14 @@ while ($listener.IsListening) {
                            $W AND (lower(c.name) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%')"
             }
 
-            # Type 7 — Execute: action_name = step label
+            # Type 7 â€” Execute: action_name = step label
             if ($types -contains '7') {
                 $parts += "$S, '7' AS match_type, d.label AS action_name
                            $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=7 AND d.commented_out=0
                            $W AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'"
             }
 
-            # Type 9 — List: JOIN action table; also search step label
+            # Type 9 â€” List: JOIN action table; also search step label
             if ($types -contains '9') {
                 $parts += "$S, '9' AS match_type, c.name AS action_name
                            $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=9 AND d.commented_out=0
@@ -228,28 +230,28 @@ while ($listener.IsListening) {
                            $W AND (lower(c.name) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%')"
             }
 
-            # Type 11 — Receive: action_name = step label (message name)
+            # Type 11 â€” Receive: action_name = step label (message name)
             if ($types -contains '11') {
                 $parts += "$S, '11' AS match_type, d.label AS action_name
                            $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=11 AND d.commented_out=0
                            $W AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'"
             }
 
-            # Type 13 — Send: action_name = step label (message name)
+            # Type 13 â€” Send: action_name = step label (message name)
             if ($types -contains '13') {
                 $parts += "$S, '13' AS match_type, d.label AS action_name
                            $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=13 AND d.commented_out=0
                            $W AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'"
             }
 
-            # Type 14 — User: action_name = step label
+            # Type 14 â€” User: action_name = step label
             if ($types -contains '14') {
                 $parts += "$S, '14' AS match_type, d.label AS action_name
                            $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=14 AND d.commented_out=0
                            $W AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'"
             }
 
-            # Type -1 — Comment: action_name = comment text
+            # Type -1 â€” Comment: action_name = comment text
             if ($types -contains '-1') {
                 $parts += "$S, '-1' AS match_type, d.label AS action_name
                            $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.commented_out=1
@@ -282,7 +284,7 @@ while ($listener.IsListening) {
             Send-Json $resp (Invoke-Sql $sql @{ '@child'=$child; '@app'=$app })
 
         } elseif ($path -eq '/api/caller-objects') {
-            # Returns unique caller process objects (for list view) — lighter than /api/callers
+            # Returns unique caller process objects (for list view) â€” lighter than /api/callers
             $child = if ($qs['childProcess']) { $qs['childProcess'] } else { '' }
             $app   = if ($qs['application'])  { $qs['application'] }  else { 'WA' }
             $sql   = "SELECT DISTINCT
