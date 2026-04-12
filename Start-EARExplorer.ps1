@@ -728,6 +728,64 @@ while ($listener.IsListening) {
                     WHERE l.id = @id"
             Send-Json $resp (Invoke-Sql $sql @{ '@id'=$id })
 
+        } elseif ($path -match '^/api/dialog-screen/(.+)$') {
+            # Full screen layout query.
+            # data_type/data_id links each screen cell to its source object:
+            #   17 = t_app_field, 18 = t_app_constant, 20 = t_app_list,
+            #   21 = t_resource, 0 = DEFAULT app slot, -1 = input slot.
+            # Input slots (-1) are matched in slot-order to t_act_dialog_detail
+            # rows (same action_id) to resolve the field_name and prompt_text
+            # that the operator actually enters.
+            $id  = [System.Uri]::UnescapeDataString($Matches[1])
+            $sql = "
+            ;WITH all_screen AS (
+                SELECT drd.screen_group,
+                       sfd.sequence, sfd.data_type,
+                       sfd.pos_row, sfd.pos_column, sfd.pos_width,
+                       COALESCE(
+                           CASE sfd.data_type WHEN 0 THEN 'DEFAULT' END,
+                           f.name, c.data_string, l.name, r.name
+                       )                                              AS data_name
+                FROM t_act_dialog_ref_detail   drd (NOLOCK)
+                JOIN t_app_screen_format_detail sfd (NOLOCK) ON sfd.id = drd.screen_format_id
+                LEFT JOIN t_app_field    f (NOLOCK) ON sfd.data_type = 17 AND sfd.data_id = f.id
+                LEFT JOIN t_app_constant c (NOLOCK) ON sfd.data_type = 18 AND sfd.data_id = c.id
+                LEFT JOIN t_app_list     l (NOLOCK) ON sfd.data_type = 20 AND sfd.data_id = l.id
+                LEFT JOIN t_resource     r (NOLOCK) ON sfd.data_type = 21 AND sfd.data_id = r.id
+                WHERE drd.id = @id
+            ),
+            input_slots AS (
+                -- Number only the -1 input slots within each screen_group in screen order
+                SELECT screen_group, sequence,
+                       ROW_NUMBER() OVER (PARTITION BY screen_group
+                                         ORDER BY pos_row, pos_column) AS slot_no
+                FROM all_screen
+                WHERE data_type = -1
+            ),
+            dialog_fields AS (
+                -- Resolve dialog input fields: field name + prompt text, in entry order
+                SELECT ROW_NUMBER() OVER (ORDER BY dd.sequence) AS field_no,
+                       COALESCE(f.name,  fp.name)               AS field_name,
+                       COALESCE(r.name,  fp2.name, f.name)      AS prompt_text
+                FROM t_act_dialog_detail dd (NOLOCK)
+                LEFT JOIN t_app_field f   (NOLOCK) ON dd.field_type  = 17 AND dd.field_id  = f.id
+                LEFT JOIN t_resource  r   (NOLOCK) ON dd.prompt_type = 21 AND dd.prompt_id = r.id
+                LEFT JOIN t_app_field fp  (NOLOCK) ON dd.prompt_type = 17 AND dd.prompt_id = fp.id
+                LEFT JOIN t_app_field fp2 (NOLOCK) ON dd.field_type  = 17 AND dd.field_id  = fp2.id
+                WHERE dd.id = @id
+            )
+            SELECT s.screen_group, s.data_type,
+                   s.pos_row, s.pos_column, s.pos_width,
+                   COALESCE(s.data_name, df.prompt_text, df.field_name) AS data_name,
+                   df.field_name, df.prompt_text
+            FROM all_screen s
+            LEFT JOIN input_slots   ins ON ins.screen_group = s.screen_group
+                                       AND ins.sequence     = s.sequence
+                                       AND s.data_type      = -1
+            LEFT JOIN dialog_fields df  ON df.field_no      = ins.slot_no
+            ORDER BY s.screen_group, s.pos_row, s.pos_column"
+            Send-Json $resp (Invoke-Sql $sql @{ '@id'=$id })
+
         } elseif ($path -match '^/api/dialog-action/(.+)$') {
             $id  = [System.Uri]::UnescapeDataString($Matches[1])
             $sql = "SELECT

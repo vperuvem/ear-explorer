@@ -610,38 +610,157 @@ async function showCallers(processName) {
 
 
 
+// Build a character-grid terminal mockup from screen format rows for one screen_group
+function renderScreenGrid(groupRows) {
+  if (!groupRows.length) return '';
+  // Parse "s8by20: Form XYZ" → rows=8, cols=20
+  // Derive dimensions from screen_group: 4→8×16, 6→6×40, 8→8×20 (standard RF scanner)
+  const sg = groupRows[0].screen_group;
+  const DIM = { '4':{r:8,c:16}, '6':{r:6,c:40}, '8':{r:8,c:20} };
+  const dim = DIM[String(sg)] || {r:8,c:20};
+  const numRows = dim.r, numCols = dim.c;
+
+  // Build a grid of {ch, type} — type: 'label'|'input'|'blank'
+  const grid = Array.from({length: numRows}, () =>
+    Array.from({length: numCols}, () => ({ch: ' ', type: 'blank'})));
+
+  groupRows.forEach(r => {
+    const row = (r.pos_row || 1) - 1;
+    const col = (r.pos_column || 1) - 1;
+    const w   = r.pos_width || 1;
+    if (row < 0 || row >= numRows || col < 0) return;
+
+    let type, text;
+    if (r.data_type === -1) {
+      // Input slot: show resolved prompt/field name if available, else underscores.
+      // The backend now joins t_act_dialog_detail by slot order to supply these.
+      type = 'input';
+      const label = (r.prompt_text || r.field_name || '').substring(0, w);
+      text = label ? label.padEnd(w, '_') : '_'.repeat(w);
+    } else if (r.data_type === 0 || (!r.data_name && r.data_type !== 18)) {
+      type = 'blank';
+      text = ' '.repeat(w);
+    } else {
+      type = 'label';
+      text = (r.data_name || '').substring(0, w).padEnd(w);
+    }
+    for (let i = 0; i < text.length && col + i < numCols; i++)
+      grid[row][col + i] = {ch: text[i], type};
+  });
+
+  // Render as HTML spans so input fields can be styled differently
+  const border = '─'.repeat(numCols + 2);
+  let html = `<pre style="font-family:'Courier New',monospace;font-size:0.82rem;line-height:1.5;
+    background:#0a1a0a;color:#33ff33;padding:8px 10px;border-radius:6px;
+    border:2px solid #1a4d1a;display:inline-block;margin:0">`;
+  html += `┌${border}┐\n`;
+  for (let r = 0; r < numRows; r++) {
+    html += '│ ';
+    for (let c = 0; c < numCols; c++) {
+      const cell = grid[r][c];
+      const ch   = cell.ch === '<' ? '&lt;' : cell.ch === '>' ? '&gt;' : cell.ch === '&' ? '&amp;' : cell.ch;
+      if (cell.type === 'input')
+        html += `<span style="color:#ffff00;font-weight:700">${ch}</span>`;
+      else if (cell.type === 'label')
+        html += `<span style="color:#33ff33">${ch}</span>`;
+      else
+        html += `<span style="color:#1a5c1a"> </span>`;
+    }
+    html += ' │\n';
+  }
+  html += `└${border}┘</pre>`;
+  return html;
+}
+
 async function showDialogDetail(r, tr) {
   showDetail(r, tr);
-  const res  = await fetch(`/api/dialog-action/${encodeURIComponent(r.action_id)}?server=${encodeURIComponent(getServer())}`);
-  const rows = await res.json();
-  if (!rows.length) return;
-  const d = rows[0];
-  const tableRows = rows.map(row => `
-    <tr>
-      <td style="padding:3px 8px;font-weight:700;color:#000">${row.sequence}</td>
-      <td style="padding:3px 8px">${esc(row.field_type_name)} ${esc(row.field_name)}</td>
-      <td style="padding:3px 8px">${esc(row.prompt_type_name)} ${esc(row.prompt_name)}</td>
-      <td style="padding:3px 8px">${esc(row.validation_type_name)} ${esc(row.validation_name)}</td>
-      <td style="padding:3px 8px;text-align:center">${row.required === 'Y' ? '✔' : ''}</td>
-      <td style="padding:3px 8px;text-align:center">${row.clear_initially === 'Y' ? '✔' : ''}</td>
-    </tr>`).join('');
+  document.getElementById('detail-title').textContent = `🖥️ Dialog: ${r.action_name || ''}`;
+
+  // Fetch field/prompt/validation list AND screen layout in parallel
+  const [actRes, scrRes] = await Promise.all([
+    fetch(`/api/dialog-action/${encodeURIComponent(r.action_id)}?server=${encodeURIComponent(getServer())}`),
+    fetch(`/api/dialog-screen/${encodeURIComponent(r.action_id)}?server=${encodeURIComponent(getServer())}`)
+  ]);
+  const actRows = await actRes.json();
+  const scrRows = await scrRes.json();
+
   const extra = document.createElement('div');
-  extra.style.cssText = 'margin-top:12px';
-  extra.innerHTML = `
-    <div style="font-weight:700;margin-bottom:4px;color:#000">${esc(d.name)}</div>
-    ${d.description ? `<div style="font-size:0.8rem;color:#000;margin-bottom:8px">${esc(d.description)}</div>` : ''}
-    <table style="width:100%;border-collapse:collapse;font-size:0.78rem">
-      <thead><tr style="background:#6d28d9;color:#fff">
-        <th style="padding:4px 8px">#</th>
-        <th style="padding:4px 8px">Field</th>
-        <th style="padding:4px 8px">Prompt</th>
-        <th style="padding:4px 8px">Validation</th>
-        <th style="padding:4px 8px">Req</th>
-        <th style="padding:4px 8px">Clr</th>
-      </tr></thead>
-      <tbody>${tableRows}</tbody>
-    </table>`;
+  extra.style.cssText = 'margin-top:10px';
+
+  // ── Screen format section ──────────────────────────────────────────────────
+  if (scrRows.length) {
+    // Group rows by screen_group
+    const groups = {};
+    scrRows.forEach(r => { (groups[r.screen_group] = groups[r.screen_group] || []).push(r); });
+    const groupKeys = Object.keys(groups).sort();
+
+    // Tab buttons
+    const tabId = 'dlg-tabs-' + Math.random().toString(36).slice(2);
+    let tabBtns = groupKeys.map((g, i) => {
+      const DIM = { '4':'8×16', '6':'6×40', '8':'8×20' };
+      const fmt = DIM[String(g)] || `group ${g}`;
+      return `<button onclick="dlgTab('${tabId}',${i})" id="${tabId}-btn-${i}"
+        style="margin-right:4px;padding:3px 10px;border-radius:4px 4px 0 0;border:1.5px solid #1a4d1a;
+        cursor:pointer;font-size:0.78rem;font-family:monospace;
+        background:${i===0?'#0a1a0a':'#d1fae5'};color:${i===0?'#33ff33':'#065f46'};font-weight:700"
+        >${fmt}</button>`;
+    }).join('');
+
+    let tabPanels = groupKeys.map((g, i) =>
+      `<div id="${tabId}-panel-${i}" style="display:${i===0?'block':'none'}">
+        ${renderScreenGrid(groups[g])}
+       </div>`
+    ).join('');
+
+    extra.innerHTML += `
+      <div style="font-weight:700;font-size:0.85rem;color:#065f46;margin-bottom:4px">📟 Screen Format</div>
+      <div style="margin-bottom:2px">${tabBtns}</div>
+      <div style="border:1.5px solid #1a4d1a;border-radius:0 6px 6px 6px;padding:8px;background:#0a1a0a;display:inline-block">
+        ${tabPanels}
+      </div>`;
+  }
+
+  // ── Field / Prompt / Validation table ─────────────────────────────────────
+  if (actRows.length) {
+    const tableRows = actRows.map(row => `
+      <tr style="border-bottom:1px solid #ede9fe">
+        <td style="padding:3px 8px;font-weight:700;color:#000">${row.sequence}</td>
+        <td style="padding:3px 8px;color:#000">${esc(row.field_type_name)} ${esc(row.field_name)}</td>
+        <td style="padding:3px 8px;color:#000">${esc(row.prompt_type_name)} ${esc(row.prompt_name)}</td>
+        <td style="padding:3px 8px;color:#000">${esc(row.validation_type_name)} ${esc(row.validation_name)}</td>
+        <td style="padding:3px 8px;text-align:center">${row.required === 'Y' ? '✔' : ''}</td>
+        <td style="padding:3px 8px;text-align:center">${row.clear_initially === 'Y' ? '✔' : ''}</td>
+      </tr>`).join('');
+    extra.innerHTML += `
+      <div style="font-weight:700;font-size:0.85rem;color:#1e40af;margin:12px 0 4px">📋 Fields &amp; Prompts</div>
+      <table style="width:100%;border-collapse:collapse;font-size:0.78rem;border-radius:6px;overflow:hidden;box-shadow:0 2px 8px rgba(124,58,237,0.10)">
+        <thead><tr style="background:linear-gradient(90deg,#6d28d9,#4338ca);color:#fff">
+          <th style="padding:4px 8px">#</th>
+          <th style="padding:4px 8px">Field</th>
+          <th style="padding:4px 8px">Prompt</th>
+          <th style="padding:4px 8px">Validation</th>
+          <th style="padding:4px 8px">Req</th>
+          <th style="padding:4px 8px">Clr</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>`;
+  }
+
   document.getElementById('detail-content').appendChild(extra);
+}
+
+// Switch screen format tabs
+function dlgTab(tabId, idx) {
+  let i = 0;
+  while (document.getElementById(`${tabId}-panel-${i}`)) {
+    const panel = document.getElementById(`${tabId}-panel-${i}`);
+    const btn   = document.getElementById(`${tabId}-btn-${i}`);
+    const active = i === idx;
+    panel.style.display = active ? 'block' : 'none';
+    btn.style.background = active ? '#0a1a0a' : '#d1fae5';
+    btn.style.color      = active ? '#33ff33' : '#065f46';
+    i++;
+  }
 }
 
 async function showCompareDetail(r, tr) {
