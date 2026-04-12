@@ -35,21 +35,19 @@
           box-shadow: 0 4px 20px rgba(67,56,202,0.10); border-left: 4px solid #7c3aed; }
   .card h2 { font-size: 1rem; color: #6d28d9; margin-bottom: 12px; }
   .controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .entry-label { font-size: 0.83rem; font-weight: 700; color: #374151; white-space: nowrap; }
   .entry-select { background: #f5f3ff; border: 1.5px solid #c4b5fd; color: #1e1b4b;
                   padding: 4px 10px; border-radius: 6px; font-size: 0.83rem;
                   width: auto; outline: none; height: 32px; }
   .entry-select:focus { border-color: #7c3aed; box-shadow: 0 0 0 2px rgba(124,58,237,0.18); }
 
-  /* Summary row */
-  .summary { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
-  .stat-box { background: #fff; border-radius: 8px; padding: 12px 20px; text-align: center;
-              box-shadow: 0 2px 10px rgba(67,56,202,0.09); min-width: 100px; }
-  .stat-box .num  { font-size: 1.8rem; font-weight: 800; }
-  .stat-box .lbl  { font-size: 0.75rem; color: #6b7280; font-weight: 600; }
-  .pass-num { color: #059669; }
-  .fail-num { color: #dc2626; }
-  .tot-num  { color: #6d28d9; }
+  /* Inline stat chips in header */
+  .stat-chip { display: inline-flex; flex-direction: column; align-items: center;
+               line-height: 1; padding: 3px 10px; border-radius: 6px; white-space: nowrap; }
+  .stat-chip .num { font-size: 1rem; font-weight: 800; }
+  .stat-chip .lbl { font-size: 0.62rem; font-weight: 700; letter-spacing: 0.04em; margin-top: 1px; }
+  .pass-chip { background: #d1fae5; color: #065f46; }
+  .fail-chip { background: #fee2e2; color: #991b1b; }
+  .tot-chip  { background: #ede9fe; color: #5b21b6; }
 
   /* Results table — same as index.html grid */
   .grid-wrap { overflow: auto; }
@@ -75,13 +73,15 @@
 
 <header>
   <h1>🧪 HighJump EAR Tester</h1>
-  <span class="entry-label">Application:</span>
   <select id="inp-entry" class="entry-select">
     <option value="">— loading… —</option>
   </select>
   <button id="btn-run" onclick="runTests()">▶ Run Tests</button>
   <button onclick="loadResults()" style="background:#ede9fe;color:#6d28d9;border:1.5px solid #c4b5fd;">⟳ Refresh</button>
   <a id="report-link" href="#" target="_blank" class="nav-link">📊 Report</a>
+  <span class="stat-chip pass-chip"><span class="num" id="stat-pass">—</span><span class="lbl">PASS</span></span>
+  <span class="stat-chip fail-chip"><span class="num" id="stat-fail">—</span><span class="lbl">FAIL</span></span>
+  <span class="stat-chip tot-chip" ><span class="num" id="stat-tot" >—</span><span class="lbl">TOTAL</span></span>
   <a class="nav-link" href="http://localhost:9000" target="_blank">Explorer</a>
   <select id="inp-server" style="margin-left:auto; font-size:0.8rem; border:1.5px solid #c4b5fd;
           border-radius:6px; padding:3px 8px; background:#f5f3ff; color:#1e1b4b; font-weight:600;">
@@ -93,15 +93,9 @@
 
 <div class="content">
 
-  <div class="summary">
-    <div class="stat-box"><div class="num pass-num" id="stat-pass">—</div><div class="lbl">PASSED</div></div>
-    <div class="stat-box"><div class="num fail-num" id="stat-fail">—</div><div class="lbl">FAILED</div></div>
-    <div class="stat-box"><div class="num tot-num"  id="stat-tot" >—</div><div class="lbl">TOTAL</div></div>
-    <div class="stat-box" style="min-width:180px;text-align:left">
-      <div style="font-size:0.78rem;color:#6b7280;font-weight:700">BASE URL</div>
-      <div id="stat-url" style="font-size:0.82rem;font-weight:600;color:#1e1b4b;margin-top:2px">—</div>
-      <div id="stat-time" class="run-at">No runs yet</div>
-    </div>
+  <div style="display:flex;gap:16px;align-items:baseline;margin-bottom:6px;flex-wrap:wrap;">
+    <span id="stat-time" class="run-at">No runs yet</span>
+    <span id="stat-url"  class="run-at" style="color:#4338ca;"></span>
   </div>
 
   <div class="grid-wrap">
