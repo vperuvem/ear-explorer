@@ -22,9 +22,16 @@ $taskName   = 'EAR Explorer'
 $nodeExe    = (Get-Command node -ErrorAction Stop).Source
 $workingDir = 'C:\Users\PVenkatesh\Downloads\ear-explorer'
 $scriptPath = Join-Path $workingDir 'server.js'
+$logFile    = Join-Path $workingDir 'startup.log'
 
-$action  = New-ScheduledTaskAction -Execute $nodeExe -Argument $scriptPath -WorkingDirectory $workingDir
-$trigger = New-ScheduledTaskTrigger -AtLogOn
+# Wrap node in a small launcher so stdout/stderr are captured to startup.log
+# cmd /c "node server.js >> startup.log 2>&1"
+$action  = New-ScheduledTaskAction `
+    -Execute  'cmd.exe' `
+    -Argument "/c `"$nodeExe`" `"$scriptPath`" >> `"$logFile`" 2>&1" `
+    -WorkingDirectory $workingDir
+
+$trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit 0 `
     -RestartCount 3 `
@@ -35,12 +42,14 @@ $settings = New-ScheduledTaskSettingsSet `
 Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
 
 Register-ScheduledTask `
-    -TaskName  $taskName `
-    -Action    $action `
-    -Trigger   $trigger `
-    -Settings  $settings `
-    -RunLevel  Limited `
+    -TaskName    $taskName `
+    -Action      $action `
+    -Trigger     $trigger `
+    -Settings    $settings `
+    -RunLevel    Limited `
+    -Description 'Starts the EAR Explorer Node.js server at logon' `
     -Force
 
 Write-Host "Task '$taskName' registered. EAR Explorer will start automatically at logon." -ForegroundColor Green
+Write-Host "Node output will be logged to: $logFile" -ForegroundColor Cyan
 Write-Host "To remove it later run: Unregister-ScheduledTask -TaskName '$taskName' -Confirm:`$false" -ForegroundColor Yellow
