@@ -1,9 +1,13 @@
 'use strict';
 const express = require('express');
 const path    = require('path');
+const fs      = require('fs');
+const http    = require('http');
 const mssql   = require('mssql/msnodesqlv8');
 
 const PORT            = 9000;
+const TESTER_PORT     = 9001;
+const TESTER_DIR      = path.join(__dirname, '..', 'ear-tester');
 const DATABASE        = 'EAR';
 const ALLOWED_SERVERS = ['ArcadiaWHJSqlStage','RetailRHjsqldev','RetailRHjsqlStage'];
 const pools           = {};
@@ -141,6 +145,13 @@ function buildSearchSql(types) {
 
 // ── Express app ───────────────────────────────────────────────────────────────
 const app = express();
+
+// Root page: port 9000 → EAR Explorer, port 9001 → EAR Tester
+app.get('/', (req, res) => {
+  const file = req.socket.localPort === TESTER_PORT ? 'tester.html' : 'index.html';
+  res.sendFile(path.join(__dirname, 'public', file));
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 function getServer(req) {
@@ -315,9 +326,39 @@ app.get('/api/db/:id', async (req, res) => {
   } catch(e) { sendErr(res, e); }
 });
 
+// ── EAR Tester API ────────────────────────────────────────────────────────────
+let testRunning = false;
+
+app.get('/api/tests/results', (req, res) => {
+  const logPath = path.join(TESTER_DIR, '_json_log.txt');
+  try {
+    if (fs.existsSync(logPath)) res.json(JSON.parse(fs.readFileSync(logPath, 'utf8')));
+    else res.json({ runAt: null, results: [] });
+  } catch(e) { res.json({ runAt: null, results: [] }); }
+});
+
+app.get('/api/tests/status', (req, res) => {
+  res.json({ running: testRunning });
+});
+
+app.post('/api/tests/run', (req, res) => {
+  if (testRunning) return res.json({ status: 'already_running' });
+  testRunning = true;
+  const { spawn } = require('child_process');
+  const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'Run-Tests.ps1'];
+  if (req.query.virtterm === '1') args.push('-VirtTerm');
+  const proc = spawn('powershell.exe', args, { cwd: TESTER_DIR, shell: false });
+  proc.on('close', () => { testRunning = false; });
+  res.json({ status: 'started' });
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+const { exec } = require('child_process');
+http.createServer(app).listen(PORT, () => {
   console.log(`EAR Explorer running at http://localhost:${PORT}`);
-  const { exec } = require('child_process');
   exec(`start http://localhost:${PORT}`);
+});
+http.createServer(app).listen(TESTER_PORT, () => {
+  console.log(`EAR Tester  running at http://localhost:${TESTER_PORT}`);
+  exec(`start http://localhost:${TESTER_PORT}`);
 });

@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>HighJump EAR Tester</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif;
+         background: linear-gradient(135deg, #ede9fe 0%, #dbeafe 100%);
+         background-attachment: fixed; color: #0f172a; min-height: 100vh; }
+
+  header { background: #ffffff; padding: 10px 24px; border-bottom: 3px solid #7c3aed;
+           display: flex; align-items: center; gap: 12px;
+           box-shadow: 0 2px 8px rgba(124,58,237,0.10); flex-wrap: nowrap; }
+  header h1 { font-size: 1.2rem; color: #7c3aed; white-space: nowrap; margin-right: 8px; }
+  header select {
+    background: #f5f3ff; border: 1.5px solid #c4b5fd; color: #1e1b4b;
+    padding: 5px 10px; border-radius: 6px; font-size: 0.88rem; outline: none; height: 32px; }
+  header select:focus { border-color: #7c3aed; box-shadow: 0 0 0 2px rgba(124,58,237,0.18); }
+  header button {
+    background: #7c3aed; color: #fff; border: none; padding: 5px 14px;
+    border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 0.88rem; height: 32px; }
+  header button:hover { background: #6d28d9; }
+  .nav-link { background: #ede9fe; color: #6d28d9; border: 1.5px solid #c4b5fd;
+              padding: 5px 12px; border-radius: 6px; font-size: 0.83rem; font-weight: 600;
+              text-decoration: none; white-space: nowrap; height: 32px; display: inline-flex;
+              align-items: center; }
+  .nav-link:hover { background: #ddd6fe; }
+
+  .content { padding: 20px 24px; }
+
+  /* Controls card */
+  .card { background: #fff; border-radius: 10px; padding: 18px 20px; margin-bottom: 18px;
+          box-shadow: 0 4px 20px rgba(67,56,202,0.10); border-left: 4px solid #7c3aed; }
+  .card h2 { font-size: 1rem; color: #6d28d9; margin-bottom: 12px; }
+  .controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px;
+                  border-radius: 12px; font-size: 0.82rem; font-weight: 700; }
+  .status-idle    { background: #d1fae5; color: #065f46; }
+  .status-running { background: #fef9c3; color: #854d0e; }
+  label.check { display: inline-flex; align-items: center; gap: 5px; font-size: 0.85rem;
+                font-weight: 600; color: #374151; cursor: pointer; }
+  label.check input { accent-color: #7c3aed; width: 14px; height: 14px; }
+
+  /* Summary row */
+  .summary { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+  .stat-box { background: #fff; border-radius: 8px; padding: 12px 20px; text-align: center;
+              box-shadow: 0 2px 10px rgba(67,56,202,0.09); min-width: 100px; }
+  .stat-box .num  { font-size: 1.8rem; font-weight: 800; }
+  .stat-box .lbl  { font-size: 0.75rem; color: #6b7280; font-weight: 600; }
+  .pass-num { color: #059669; }
+  .fail-num { color: #dc2626; }
+  .tot-num  { color: #6d28d9; }
+
+  /* Results table — same as index.html grid */
+  .grid-wrap { overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem;
+          background: #fff; border-radius: 10px; overflow: hidden;
+          box-shadow: 0 4px 20px rgba(67,56,202,0.12); }
+  thead th { background: linear-gradient(90deg, #6d28d9 0%, #4338ca 100%); color: #fff;
+             padding: 9px 12px; text-align: left; white-space: nowrap;
+             border-bottom: 2px solid #5b21b6; }
+  tbody tr { border-bottom: 1px solid rgba(0,0,0,0.06); }
+  tbody td { padding: 7px 12px; white-space: nowrap; max-width: 380px;
+             overflow: hidden; text-overflow: ellipsis; color: #000; font-size: 0.83rem; }
+  tr.pass-row { background: #d1fae5; }
+  tr.fail-row { background: #fee2e2; }
+  tr.err-row  { background: #fef9c3; }
+  .run-at { font-size: 0.78rem; color: #6b7280; margin-top: 6px; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #c4b5fd;
+             border-top-color: #7c3aed; border-radius: 50%; animation: spin 0.7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🧪 HighJump EAR Tester</h1>
+  <a class="nav-link" href="http://localhost:9000" target="_blank">⚙️ EAR Explorer</a>
+  <span id="status-badge" class="status-badge status-idle">● Idle</span>
+  <select id="inp-server" style="margin-left:auto; font-size:0.8rem; border:1.5px solid #c4b5fd;
+          border-radius:6px; padding:3px 8px; background:#f5f3ff; color:#1e1b4b; font-weight:600;">
+    <option value="ArcadiaWHJSqlStage" selected>ArcadiaWHJSqlStage</option>
+    <option value="RetailRHjsqldev">RetailRHjsqldev</option>
+    <option value="RetailRHjsqlStage">RetailRHjsqlStage</option>
+  </select>
+</header>
+
+<div class="content">
+
+  <div class="card">
+    <h2>🎛️ Test Controls</h2>
+    <div class="controls">
+      <label class="check"><input type="checkbox" id="cb-virtterm"/> VirtTerm Tests</label>
+      <button onclick="runTests()">▶ Run Tests</button>
+      <button onclick="loadResults()" style="background:#ede9fe;color:#6d28d9;border:1.5px solid #c4b5fd;">⟳ Refresh Results</button>
+      <a id="report-link" href="#" target="_blank"
+         style="background:#ede9fe;color:#6d28d9;border:1.5px solid #c4b5fd;padding:5px 12px;
+                border-radius:6px;font-size:0.83rem;font-weight:600;text-decoration:none;height:32px;
+                display:inline-flex;align-items:center;">📊 HTML Report</a>
+    </div>
+  </div>
+
+  <div class="summary">
+    <div class="stat-box"><div class="num pass-num" id="stat-pass">—</div><div class="lbl">PASSED</div></div>
+    <div class="stat-box"><div class="num fail-num" id="stat-fail">—</div><div class="lbl">FAILED</div></div>
+    <div class="stat-box"><div class="num tot-num"  id="stat-tot" >—</div><div class="lbl">TOTAL</div></div>
+    <div class="stat-box" style="min-width:180px;text-align:left">
+      <div style="font-size:0.78rem;color:#6b7280;font-weight:700">BASE URL</div>
+      <div id="stat-url" style="font-size:0.82rem;font-weight:600;color:#1e1b4b;margin-top:2px">—</div>
+      <div id="stat-time" class="run-at">No runs yet</div>
+    </div>
+  </div>
+
+  <div class="grid-wrap">
+    <table id="results-table">
+      <thead>
+        <tr>
+          <th style="width:130px">Suite</th>
+          <th>Test Name</th>
+          <th style="width:80px">Status</th>
+          <th style="width:70px">Time</th>
+          <th>Detail</th>
+        </tr>
+      </thead>
+      <tbody id="results-body">
+        <tr><td colspan="5" style="color:#8892a4;padding:14px;text-align:center">
+          No results yet — click ▶ Run Tests or ⟳ Refresh Results</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+let polling = null;
+
+function esc(s) {
+  return (s == null ? '' : String(s))
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function runTests() {
+  const vt  = document.getElementById('cb-virtterm').checked ? '1' : '0';
+  const res = await fetch(`/api/tests/run?virtterm=${vt}`, { method: 'POST' });
+  const d   = await res.json();
+  if (d.status === 'already_running') { alert('Tests already running.'); return; }
+  setRunning(true);
+  if (!polling) polling = setInterval(checkStatus, 2500);
+}
+
+async function checkStatus() {
+  const res = await fetch('/api/tests/status');
+  const d   = await res.json();
+  if (!d.running) {
+    clearInterval(polling); polling = null;
+    setRunning(false);
+    await loadResults();
+  }
+}
+
+function setRunning(on) {
+  const b = document.getElementById('status-badge');
+  b.className = 'status-badge ' + (on ? 'status-running' : 'status-idle');
+  b.innerHTML = on ? '<span class="spinner"></span> Running…' : '● Idle';
+}
+
+async function loadResults() {
+  const res = await fetch('/api/tests/results');
+  const d   = await res.json();
+  if (!d.results || !d.results.length) return;
+
+  document.getElementById('stat-pass').textContent = d.passed  ?? '—';
+  document.getElementById('stat-fail').textContent = (d.failed ?? 0) + (d.errors ?? 0);
+  document.getElementById('stat-tot' ).textContent = d.total   ?? '—';
+  document.getElementById('stat-url' ).textContent = d.baseUrl ?? '';
+  if (d.runAt) {
+    const dt = new Date(d.runAt);
+    document.getElementById('stat-time').textContent = 'Run: ' + dt.toLocaleString();
+  }
+
+  const tbody = document.getElementById('results-body');
+  tbody.innerHTML = d.results.map(r => {
+    const cls = r.status === 'PASS' ? 'pass-row' : r.status === 'FAIL' ? 'fail-row' : 'err-row';
+    const icon = r.status === 'PASS' ? '✅' : r.status === 'FAIL' ? '❌' : '⚠️';
+    return `<tr class="${cls}">
+      <td>${esc(r.suite)}</td>
+      <td>${esc(r.name)}</td>
+      <td style="font-weight:700">${icon} ${esc(r.status)}</td>
+      <td>${r.ms ?? ''}ms</td>
+      <td title="${esc(r.detail)}">${esc(r.detail)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// Auto-load on open
+loadResults();
+</script>
+</body>
+</html>
