@@ -1,17 +1,4 @@
 ﻿# EAR Explorer - PowerShell HTTP Server
-
-# ── Auto-clean stale HTTP.sys port reservations (one UAC prompt, runs fast) ──
-$stalePorts = @(3000, 4747, 5555, 6789, 7777, 8080, 8081, 8082, 9090)
-$staleUrls  = $stalePorts | ForEach-Object { "http://+:$_/"; "http://localhost:$_/"; "http://*:$_/" }
-$needClean  = $false
-foreach ($u in $staleUrls) {
-    if ((netsh http show urlacl 2>&1) -match [regex]::Escape($u)) { $needClean = $true; break }
-}
-if ($needClean) {
-    $cmds = ($staleUrls | ForEach-Object { "netsh http delete urlacl url=$_ >nul 2>&1" }) -join ' & '
-    Start-Process cmd -ArgumentList "/c $cmds" -Verb RunAs -Wait -WindowStyle Hidden
-}
-
 $Port              = 8080
 $Database          = 'EAR'
 $IndexHtml         = Join-Path $PSScriptRoot 'public\index.html'
