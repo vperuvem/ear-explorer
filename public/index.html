@@ -132,20 +132,20 @@
                   word-break: break-all; margin-top: 8px; max-height: 400px; overflow-y: auto;
                   border: 1.5px solid #bbf7d0; }
 
-  /* Action type row colors — pastel palette */
-  .at-1   { background: #c8f7c5; }  /* Process   – pastel green     */
-  .at-3   { background: #c5e8f7; }  /* Calculate – pastel blue      */
-  .at-4   { background: #f7c5f0; }  /* Compare   – pastel mauve     */
-  .at-5   { background: #f7f0c5; }  /* Database  – pastel yellow    */
-  .at-6   { background: #f7ddc5; }  /* Dialog    – pastel peach     */
-  .at-7   { background: #f7c5c5; }  /* Execute   – pastel salmon    */
-  .at-9   { background: #d4c5f7; }  /* List      – pastel lavender  */
-  .at-11  { background: #f7c5d8; }  /* Receive   – pastel pink      */
-  .at-12  { background: #f7e6c5; }  /* Report    – pastel amber     */
-  .at-13  { background: #c5d8f7; }  /* Send      – pastel sky blue  */
-  .at-14  { background: #dcf7c5; }  /* User      – pastel lime      */
-  .at-19  { background: #c5f7e6; }  /* Record    – pastel mint      */
-  .at-neg1{ background: #f5f5f5; }  /* Comment   – light grey       */
+  /* Action type row colors — maximum saturation bright palette */
+  .at-1   { background: #39ff14; }  /* Process   – neon green       */
+  .at-3   { background: #00e5ff; }  /* Calculate – neon cyan        */
+  .at-4   { background: #ff40ff; }  /* Compare   – neon magenta     */
+  .at-5   { background: #ffff00; }  /* Database  – fluorescent yellow */
+  .at-6   { background: #ffff00; }  /* Dialog    – neon yellow      */
+  .at-7   { background: #ff2d2d; }  /* Execute   – neon red         */
+  .at-9   { background: #ffff00; }  /* List      – neon yellow      */
+  .at-11  { background: #ff6ec7; }  /* Receive   – neon hot pink    */
+  .at-12  { background: #ffd300; }  /* Report    – neon amber/gold  */
+  .at-13  { background: #0080ff; }  /* Send      – neon blue        */
+  .at-14  { background: #b5ff00; }  /* User      – neon lime-green  */
+  .at-19  { background: #00ff9f; }  /* Record    – neon mint        */
+  .at-neg1{ background: #ffffff; }  /* Comment   – white            */
 
   #detail-panel { display: none; position: fixed; top: 0; right: 0; width: 420px; height: 100vh;
                   background: linear-gradient(160deg, #f5f3ff 0%, #eff6ff 100%);
@@ -223,9 +223,9 @@
 
 <script>
 const ACTION_COLORS = {
-  '1':'#c8f7c5','3':'#c5e8f7','4':'#f7c5f0','5':'#f7f0c5',
-  '6':'#f7ddc5','7':'#f7c5c5','9':'#d4c5f7','11':'#f7c5d8',
-  '12':'#f7e6c5','13':'#c5d8f7','14':'#dcf7c5','19':'#c5f7e6','-1':'#f5f5f5'
+  '1':'#39ff14','3':'#00e5ff','4':'#ff40ff','5':'#ffff00',
+  '6':'#ffff00','7':'#ff2d2d','9':'#ffff00','11':'#ff6ec7',
+  '12':'#ffd300','13':'#0080ff','14':'#b5ff00','19':'#00ff9f','-1':'#ffffff'
 };
 const ACTION_LABELS = {
   '1':'Process','3':'Calculate','4':'Compare','5':'Database',
