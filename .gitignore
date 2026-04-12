@@ -1,3 +1,11 @@
 node_modules/
 npm-debug.log*
 package-lock.json
+
+# scratch / debug output files
+*.txt
+*.log
+*_old.*
+staged.txt
+git_out.txt
+gitlog*.txt
