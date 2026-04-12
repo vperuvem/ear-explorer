@@ -152,10 +152,11 @@ async function loadEntryPoints() {
   sel.innerHTML = '<option value="">— loading… —</option>';
   try {
     const rows = await (await fetch(`/api/devices?server=${encodeURIComponent(server)}`)).json();
-    if (!rows.length) { sel.innerHTML = '<option value="">— no devices found —</option>'; return; }
-    sel.innerHTML = rows.map(r =>
-      `<option value="${esc(r.id)}" data-app="${esc(r.app_name)}" data-proc="${esc(r.process_name)}" data-type="${esc(r.dev_type)}">` +
-      `${esc(r.app_name)} – ${esc(r.process_name)}  [${esc(r.dev_type)}]</option>`
+    const vt = rows.filter(r => /virtual/i.test(r.dev_type));
+    if (!vt.length) { sel.innerHTML = '<option value="">— no virtual terminal entry points found —</option>'; return; }
+    sel.innerHTML = vt.map(r =>
+      `<option value="${esc(r.id)}" data-app="${esc(r.app_name)}" data-proc="${esc(r.process_name)}">` +
+      `${esc(r.app_name)} – ${esc(r.process_name)}</option>`
     ).join('');
   } catch(e) { sel.innerHTML = '<option value="">— error loading devices —</option>'; }
 }
