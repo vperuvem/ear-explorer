@@ -45,6 +45,12 @@
                    color: #7c3aed; text-transform: uppercase; letter-spacing: 0.06em; }
   .scope-divider { border: none; border-top: 1px solid #e9d5ff; margin: 4px 0; }
 
+  /* App name badge on device list items */
+  .app-badge { font-size: 0.75rem; font-weight: 700; padding: 3px 10px; border-radius: 12px;
+               background: #ede9fe; color: #6d28d9; white-space: nowrap; cursor: pointer;
+               border: 1.5px solid #c4b5fd; margin-left: 8px; flex-shrink: 0; }
+  .app-badge:hover { background: #ddd6fe; border-color: #7c3aed; }
+
   /* Match-type badge on proc list items */
   .match-badge { font-size: 0.7rem; font-weight: 700; padding: 2px 7px; border-radius: 4px;
                  white-space: nowrap; margin-top: 3px; }
@@ -266,6 +272,77 @@ function updateScopeBtn() {
 // Type checkboxes → update button label only (these control search scope, not display filter)
 document.querySelectorAll('.type-cb').forEach(cb =>
   cb.addEventListener('change', updateScopeBtn));
+
+// Load T_DEVICE processes on first screen
+async function loadDevices() {
+  try {
+    const res = await fetch(`/api/devices?server=${encodeURIComponent(getServer())}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    searchList = data;
+    viewMode = 'list';
+    navStack = [];
+    document.getElementById('btn-back').style.display = 'none';
+    renderDeviceList();
+  } catch(e) {
+    console.warn('Device load failed:', e.message);
+  }
+}
+
+function renderDeviceList() {
+  document.getElementById('proc-list-view').style.display = 'block';
+  document.getElementById('grid-view').style.display      = 'none';
+  const container = document.getElementById('proc-list-view');
+  if (!searchList.length) {
+    container.innerHTML = '<p style="color:#8892a4;padding:12px">No device processes found.</p>';
+    return;
+  }
+
+  // Terminals first, then descending by app name
+  const sorted = searchList.slice().sort((a, b) => {
+    const aT = /terminal/i.test(a.dev_type) ? 0 : 1;
+    const bT = /terminal/i.test(b.dev_type) ? 0 : 1;
+    if (aT !== bT) return aT - bT;
+    return b.app_name.localeCompare(a.app_name);
+  });
+
+  container.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:0.88rem;
+                  background:#ffffff;border-radius:10px;overflow:hidden;
+                  box-shadow:0 4px 20px rgba(67,56,202,0.12);">
+      <thead>
+        <tr style="background:#6d28d9;color:#ffffff;">
+          <th style="padding:8px 14px;text-align:left;border-right:1px solid #7c3aed;width:160px">Application</th>
+          <th style="padding:8px 14px;text-align:left;border-right:1px solid #7c3aed;width:160px">Device Type</th>
+          <th style="padding:8px 14px;text-align:left;">Entry Process</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${sorted.map((p, i) => `
+          <tr class="device-item" data-idx="${i}"
+              style="border-bottom:1px solid #e9d5ff;cursor:pointer;transition:background 0.1s;"
+              onmouseover="this.style.background='#ede9fe'" onmouseout="this.style.background=''">
+            <td style="padding:8px 14px;border-right:1px solid #e9d5ff;font-weight:700;color:#6d28d9;">
+              <span class="app-badge" data-app="${esc(p.app_name)}" title="Click to set application filter">${esc(p.app_name)}</span>
+            </td>
+            <td style="padding:8px 14px;border-right:1px solid #e9d5ff;color:#374151;">${esc(p.dev_type)}</td>
+            <td style="padding:8px 14px;color:#000;">⚙️ ${esc(p.process_name)}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+
+  // Row click → set app + open process; badge click → set app only
+  container.querySelectorAll('.device-item').forEach((el, i) => {
+    el.addEventListener('click', (e) => {
+      if (e.target.classList.contains('app-badge')) {
+        document.getElementById('inp-app').value = e.target.dataset.app;
+        return;
+      }
+      document.getElementById('inp-app').value = sorted[i].app_name;
+      openProcess(sorted[i].id, sorted[i].process_name, true);
+    });
+  });
+}
 
 // Search — shows list of matching process objects
 async function loadData() {
@@ -972,7 +1049,8 @@ function closeDetail() {
 
 document.getElementById('inp-process').addEventListener('keydown', e => { if(e.key==='Enter') loadData(); });
 
-loadData();
+// On first load: show T_DEVICE processes; if that fails, fall back to a normal search
+loadDevices();
 </script>
 </body>
 </html>

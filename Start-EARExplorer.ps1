@@ -1,5 +1,18 @@
 ﻿# EAR Explorer - PowerShell HTTP Server
-$Port              = 6789
+
+# ── Auto-clean stale HTTP.sys port reservations (one UAC prompt, runs fast) ──
+$stalePorts = @(3000, 4747, 5555, 6789, 7777, 8080, 8081, 8082, 9090)
+$staleUrls  = $stalePorts | ForEach-Object { "http://+:$_/"; "http://localhost:$_/"; "http://*:$_/" }
+$needClean  = $false
+foreach ($u in $staleUrls) {
+    if ((netsh http show urlacl 2>&1) -match [regex]::Escape($u)) { $needClean = $true; break }
+}
+if ($needClean) {
+    $cmds = ($staleUrls | ForEach-Object { "netsh http delete urlacl url=$_ >nul 2>&1" }) -join ' & '
+    Start-Process cmd -ArgumentList "/c $cmds" -Verb RunAs -Wait -WindowStyle Hidden
+}
+
+$Port              = 8080
 $Database          = 'EAR'
 $IndexHtml         = Join-Path $PSScriptRoot 'public\index.html'
 $AllowedServers    = @('ArcadiaWHJSqlStage','RetailRHjsqldev','RetailRHjsqlStage')
@@ -134,6 +147,17 @@ function Invoke-StaticHtml($resp) {
     $html = [System.IO.File]::ReadAllBytes($IndexHtml)
     $resp.ContentType = 'text/html'
     $resp.OutputStream.Write($html, 0, $html.Length)
+}
+
+function Invoke-Devices($resp) {
+    $sql = "SELECT DISTINCT CAST(p.id AS NVARCHAR(36)) AS id, p.name AS process_name, a.name AS app_name, dt.dev_type
+            FROM ADV.dbo.t_device (NOLOCK) d
+            JOIN ADV.dbo.t_solution (NOLOCK) s ON s.solution_id = d.solution_id
+            JOIN EAR.dbo.t_app_process_object (NOLOCK) p ON s.application_id = p.application_id AND p.id = d.process_object_id
+            JOIN EAR.dbo.t_application_development (NOLOCK) a ON a.application_id = p.application_id
+            JOIN ADV.dbo.t_device_type (NOLOCK) dt ON d.device_type_id = dt.device_type_id
+            ORDER BY a.name, p.name"
+    Send-Json $resp (Invoke-Sql $sql)
 }
 
 function Build-SearchSql($proc, $app, $types) {
@@ -421,10 +445,15 @@ function Invoke-DbAction($resp, $id) {
 
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://localhost:$Port/")
-$listener.Start()
+try { $listener.Start() }
+catch {
+    Write-Host "ERROR: Port $Port is already in use. Close the other process and try again." -ForegroundColor Red
+    exit 1
+}
 Write-Host "EAR Explorer at http://localhost:$Port" -ForegroundColor Cyan
 Start-Process "http://localhost:$Port"
 
+try {
 while ($listener.IsListening) {
     $ctx  = $listener.GetContext()
     $req  = $ctx.Request
@@ -439,6 +468,7 @@ while ($listener.IsListening) {
 
         switch -Regex ($path) {
             '^/$|^/index\.html$'         { Invoke-StaticHtml $resp; break }
+            '^/api/devices$'             { Invoke-Devices $resp; break }
             '^/api/search$'              { Invoke-Search $resp $qs; break }
             '^/api/process/(.+)$'        { Invoke-ProcessDetail $resp ([System.Uri]::UnescapeDataString($Matches[1])) $qs; break }
             '^/api/callers$'             { Invoke-Callers $resp $qs; break }
@@ -832,4 +862,9 @@ while ($listener.IsListening) {
         $resp.OutputStream.Write($bytes, 0, $bytes.Length)
     }
     $resp.Close()
+}
+} finally {
+    $listener.Stop()
+    $listener.Close()
+    Write-Host "EAR Explorer stopped -- port $Port released." -ForegroundColor Yellow
 }
