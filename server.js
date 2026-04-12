@@ -1,0 +1,323 @@
+'use strict';
+const express = require('express');
+const path    = require('path');
+const mssql   = require('mssql/msnodesqlv8');
+
+const PORT            = 9000;
+const DATABASE        = 'EAR';
+const ALLOWED_SERVERS = ['ArcadiaWHJSqlStage','RetailRHjsqldev','RetailRHjsqlStage'];
+const pools           = {};
+
+// ── Connection pool per server ────────────────────────────────────────────────
+const ODBC_DRIVERS = [
+  'ODBC Driver 18 for SQL Server',
+  'ODBC Driver 17 for SQL Server',
+  'SQL Server Native Client 11.0',
+  'SQL Server Native Client 10.0',
+  'SQL Server'
+];
+
+async function getPool(server) {
+  if (pools[server]) return pools[server];
+  let lastErr;
+  for (const drv of ODBC_DRIVERS) {
+    try {
+      pools[server] = await mssql.connect({
+        connectionString: `Driver={${drv}};Server=${server};Database=${DATABASE};Trusted_Connection=yes;`
+      });
+      console.log(`Connected to ${server} using driver: ${drv}`);
+      return pools[server];
+    } catch(e) { lastErr = e; delete pools[server]; }
+  }
+  throw new Error(`Could not connect to ${server}. No working ODBC driver found. Last error: ${lastErr.message}`);
+}
+
+// ── Run a parameterised query, strip control chars from strings ───────────────
+async function runQuery(server, sql, params = {}) {
+  const pool = await getPool(server);
+  const req  = pool.request();
+  for (const [k, v] of Object.entries(params))
+    req.input(k, mssql.NVarChar, v == null ? '' : String(v));
+  const { recordset } = await req.query(sql);
+  return recordset.map(row => {
+    const obj = {};
+    for (const [k, v] of Object.entries(row))
+      obj[k] = typeof v === 'string' ? v.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') : v;
+    return obj;
+  });
+}
+
+// ── Resolve :#type#GUID#: placeholders in database statement fields ────────────
+const TYPE_LABELS = { 17: 'Field', 19: 'Record' };
+async function resolveGuids(server, rows) {
+  const pat   = /:#(\d+)#([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})#:/g;
+  const guids = new Set();
+  for (const row of rows)
+    if (row.statement) for (const m of row.statement.matchAll(pat)) guids.add(m[2].toUpperCase());
+  if (!guids.size) return rows;
+
+  const inList  = [...guids].map(g => `'${g}'`).join(',');
+  const nameMap = {};
+  const names   = await runQuery(server,
+    `SELECT UPPER(id) AS id, name FROM t_app_field  WHERE UPPER(id) IN (${inList})
+     UNION ALL
+     SELECT UPPER(id) AS id, name FROM t_app_record WHERE UPPER(id) IN (${inList})`);
+  for (const r of names) nameMap[r.id] = r.name;
+
+  return rows.map(row => {
+    if (!row.statement) return row;
+    row.statement = row.statement.replace(pat, (_, type, guid) => {
+      const g = guid.toUpperCase();
+      const label = TYPE_LABELS[+type] || `Type${type}`;
+      return nameMap[g] ? `[${label}: ${nameMap[g]}]` : `:#${type}#${guid}#:`;
+    });
+    return row;
+  });
+}
+
+// ── SQL constants ─────────────────────────────────────────────────────────────
+const DETAIL_JOINS = `
+FROM t_app_process_object m (NOLOCK)
+JOIN t_app_process_object_detail d (NOLOCK) ON m.id = d.id AND d.version = m.version
+JOIN t_application_development a (NOLOCK)   ON m.application_id = a.application_id
+LEFT JOIN t_app_process_object po   (NOLOCK) ON d.action_type =  1 AND d.action_id = po.id
+LEFT JOIN t_act_calculate     calc  (NOLOCK) ON d.action_type =  3 AND d.action_id = calc.id
+LEFT JOIN t_act_compare       comp  (NOLOCK) ON d.action_type =  4 AND d.action_id = comp.id
+LEFT JOIN t_act_database      db    (NOLOCK) ON d.action_type =  5 AND d.action_id = db.id
+LEFT JOIN t_act_dialog        dlg   (NOLOCK) ON d.action_type =  6 AND d.action_id = dlg.id
+LEFT JOIN t_act_execute       exe   (NOLOCK) ON d.action_type =  7 AND d.action_id = exe.id
+LEFT JOIN t_act_list          lst   (NOLOCK) ON d.action_type =  9 AND d.action_id = lst.id
+LEFT JOIN t_act_send          snd   (NOLOCK) ON d.action_type = 13 AND d.action_id = snd.id
+LEFT JOIN t_act_user          usr   (NOLOCK) ON d.action_type = 14 AND d.action_id = usr.id
+LEFT JOIN t_act_receive       rcv   (NOLOCK) ON d.action_type = 11 AND d.action_id = rcv.id
+LEFT JOIN t_act_report        rpt   (NOLOCK) ON d.action_type = 12 AND d.action_id = rpt.id
+LEFT JOIN t_app_record        rec   (NOLOCK) ON d.action_type = 19 AND d.action_id = rec.id
+LEFT JOIN t_act_publish       pub   (NOLOCK) ON d.action_type = 10 AND d.action_id = pub.id
+LEFT JOIN t_app_locale        loc   (NOLOCK) ON d.action_type = 16 AND d.action_id = loc.id
+LEFT JOIN t_app_field         fld   (NOLOCK) ON d.action_type = 17 AND d.action_id = fld.id
+LEFT JOIN t_app_constant      con   (NOLOCK) ON d.action_type = 18 AND d.action_id = con.id`;
+
+const DETAIL_COLS = `
+SELECT DISTINCT m.name AS process_name, d.sequence, d.label,
+  CASE d.action_type
+    WHEN  1 THEN 'Process'   WHEN  3 THEN 'Calculate' WHEN  4 THEN 'Compare'
+    WHEN  5 THEN 'Database'  WHEN  6 THEN 'Dialog'    WHEN  7 THEN 'Execute'
+    WHEN  9 THEN 'List'      WHEN 11 THEN 'Receive'   WHEN 12 THEN 'Report'
+    WHEN 13 THEN 'Send'      WHEN 14 THEN 'User'      WHEN 19 THEN 'Record'
+    WHEN  2 THEN 'Folder'    WHEN  8 THEN 'Label'     WHEN 10 THEN 'Publish'
+    WHEN 15 THEN 'DB Def'    WHEN 16 THEN 'Locale'    WHEN 17 THEN 'Field'
+    WHEN 18 THEN 'Constant'  WHEN -1 THEN 'Comment'
+    ELSE 'Unknown(' + CAST(d.action_type AS VARCHAR) + ')'
+  END AS action_type_name, d.action_type,
+  COALESCE(po.name,calc.name,comp.name,db.name,dlg.name,exe.name,
+           lst.name,snd.name,usr.name,rcv.name,rpt.name,rec.name,
+           pub.name,loc.name,fld.name,
+           COALESCE(con.data_string,CAST(con.data_number AS NVARCHAR(50)),CAST(con.data_datetime AS NVARCHAR(50))),
+           d.comments) AS action_name,
+  d.pass_label, d.fail_label, d.commented_out,
+  CAST(d.action_id AS NVARCHAR(36)) AS action_id,
+  CAST(m.id AS NVARCHAR(36)) AS process_id`;
+
+// ── Search SQL builder ────────────────────────────────────────────────────────
+function buildSearchSql(types) {
+  const S = `SELECT DISTINCT CAST(m.id AS NVARCHAR(36)) AS id, m.name, m.description, m.version`;
+  const J = `FROM t_app_process_object m (NOLOCK) JOIN t_application_development a (NOLOCK) ON m.application_id = a.application_id`;
+  const W = `WHERE a.name = @app`;
+  const parts = [];
+  if (types.includes('1'))  parts.push(`${S}, '1' AS match_type, m.name AS action_name ${J} ${W} AND lower(m.name) LIKE '%'+lower(@proc)+'%'`);
+  if (types.includes('3'))  parts.push(`${S}, '3' AS match_type, c.name AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=3 AND d.commented_out=0 JOIN t_act_calculate c (NOLOCK) ON c.id=d.action_id ${W} AND (lower(c.name) LIKE '%'+lower(@proc)+'%' OR d.action_id IN (SELECT DISTINCT cd.id FROM t_act_calculate_detail cd (NOLOCK) LEFT JOIN t_app_field f1 (NOLOCK) ON cd.operand1_type=17 AND cd.operand1_id=f1.id LEFT JOIN t_app_field f2 (NOLOCK) ON cd.operand2_type=17 AND cd.operand2_id=f2.id LEFT JOIN t_app_field rf (NOLOCK) ON cd.result_type=17 AND cd.result_id=rf.id LEFT JOIN t_app_constant c1 (NOLOCK) ON cd.operand1_type=18 AND cd.operand1_id=c1.id LEFT JOIN t_app_constant c2 (NOLOCK) ON cd.operand2_type=18 AND cd.operand2_id=c2.id WHERE lower(ISNULL(f1.name,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(f2.name,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(rf.name,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(c1.data_string,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(c2.data_string,'')) LIKE '%'+lower(@proc)+'%'))`);
+  if (types.includes('4'))  parts.push(`${S}, '4' AS match_type, c.name AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=4 AND d.commented_out=0 JOIN t_act_compare c (NOLOCK) ON c.id=d.action_id ${W} AND (lower(c.name) LIKE '%'+lower(@proc)+'%' OR d.action_id IN (SELECT cmp.id FROM t_act_compare cmp (NOLOCK) LEFT JOIN t_app_field f1 (NOLOCK) ON cmp.operand1_type=17 AND cmp.operand1_id=f1.id LEFT JOIN t_app_field f2 (NOLOCK) ON cmp.operand2_type=17 AND cmp.operand2_id=f2.id LEFT JOIN t_app_constant c1 (NOLOCK) ON cmp.operand1_type=18 AND cmp.operand1_id=c1.id LEFT JOIN t_app_constant c2 (NOLOCK) ON cmp.operand2_type=18 AND cmp.operand2_id=c2.id WHERE lower(ISNULL(f1.name,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(f2.name,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(c1.data_string,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(c2.data_string,'')) LIKE '%'+lower(@proc)+'%'))`);
+  if (types.includes('5'))  parts.push(`${S}, '5' AS match_type, c.name AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=5 AND d.commented_out=0 JOIN t_act_database c (NOLOCK) ON c.id=d.action_id ${W} AND (lower(c.name) LIKE '%'+lower(@proc)+'%' OR EXISTS (SELECT 1 FROM t_act_database_detail dd (NOLOCK) WHERE dd.id=d.action_id AND lower(CAST(dd.statement AS NVARCHAR(MAX))) LIKE '%'+lower(@proc)+'%'))`);
+  if (types.includes('6'))  parts.push(`${S}, '6' AS match_type, c.name AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=6 AND d.commented_out=0 JOIN t_act_dialog c (NOLOCK) ON c.id=d.action_id ${W} AND (lower(c.name) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%')`);
+  if (types.includes('7'))  parts.push(`${S}, '7' AS match_type, d.label AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=7 AND d.commented_out=0 ${W} AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'`);
+  if (types.includes('9'))  parts.push(`${S}, '9' AS match_type, c.name AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=9 AND d.commented_out=0 JOIN t_act_list c (NOLOCK) ON c.id=d.action_id ${W} AND (lower(c.name) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%')`);
+  if (types.includes('11')) parts.push(`${S}, '11' AS match_type, d.label AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=11 AND d.commented_out=0 ${W} AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'`);
+  if (types.includes('13')) parts.push(`${S}, '13' AS match_type, d.label AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=13 AND d.commented_out=0 ${W} AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'`);
+  if (types.includes('14')) parts.push(`${S}, '14' AS match_type, d.label AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=14 AND d.commented_out=0 ${W} AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'`);
+  if (types.includes('-1')) parts.push(`${S}, '-1' AS match_type, d.label AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.commented_out=1 ${W} AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'`);
+  if (!parts.length) parts.push(`${S}, '1' AS match_type, m.name AS action_name ${J} WHERE 1=0`);
+  return parts.join(' UNION ') + ' ORDER BY action_name';
+}
+
+// ── Express app ───────────────────────────────────────────────────────────────
+const app = express();
+app.use(express.static(path.join(__dirname, 'public')));
+
+function getServer(req) {
+  const s = req.query.server || 'ArcadiaWHJSqlStage';
+  return ALLOWED_SERVERS.includes(s) ? s : 'ArcadiaWHJSqlStage';
+}
+
+function send(res, rows) { res.json(rows); }
+function sendErr(res, err) { console.error(err); res.status(500).json({ error: err.message }); }
+
+// ── Routes ────────────────────────────────────────────────────────────────────
+app.get('/api/devices', async (req, res) => {
+  try {
+    const rows = await runQuery(getServer(req), `
+      SELECT DISTINCT CAST(p.id AS NVARCHAR(36)) AS id, p.name AS process_name, a.name AS app_name, dt.dev_type
+      FROM ADV.dbo.t_device (NOLOCK) d
+      JOIN ADV.dbo.t_solution (NOLOCK) s ON s.solution_id = d.solution_id
+      JOIN EAR.dbo.t_app_process_object (NOLOCK) p ON s.application_id = p.application_id AND p.id = d.process_object_id
+      JOIN EAR.dbo.t_application_development (NOLOCK) a ON a.application_id = p.application_id
+      JOIN ADV.dbo.t_device_type (NOLOCK) dt ON d.device_type_id = dt.device_type_id
+      ORDER BY a.name, p.name`);
+    send(res, rows);
+  } catch(e) { sendErr(res, e); }
+});
+
+app.get('/api/search', async (req, res) => {
+  try {
+    const proc  = req.query.process     || '';
+    const app   = req.query.application || 'WA';
+    const types = (req.query.scope || '1').split(',');
+    const rows  = await runQuery(getServer(req), buildSearchSql(types), { proc, app });
+    send(res, rows);
+  } catch(e) { sendErr(res, e); }
+});
+
+app.get('/api/process/:id', async (req, res) => {
+  try {
+    const rows = await runQuery(getServer(req),
+      `${DETAIL_COLS} ${DETAIL_JOINS} WHERE a.name = @app AND m.id = @id ORDER BY d.sequence`,
+      { id: req.params.id, app: req.query.application || 'WA' });
+    send(res, rows);
+  } catch(e) { sendErr(res, e); }
+});
+
+app.get('/api/callers', async (req, res) => {
+  try {
+    const rows = await runQuery(getServer(req), `${DETAIL_COLS} ${DETAIL_JOINS}
+      WHERE a.name = @app AND m.id IN (
+        SELECT DISTINCT d2.id FROM t_app_process_object_detail d2 (NOLOCK)
+        JOIN t_app_process_object ch (NOLOCK) ON d2.action_id = ch.id AND d2.action_type = 1
+          AND ch.name COLLATE SQL_Latin1_General_CP1_CS_AS = @child)
+      ORDER BY m.name, d.sequence`,
+      { child: req.query.childProcess || '', app: req.query.application || 'WA' });
+    send(res, rows);
+  } catch(e) { sendErr(res, e); }
+});
+
+app.get('/api/callerObjects', async (req, res) => {
+  try {
+    const rows = await runQuery(getServer(req), `
+      SELECT DISTINCT CAST(m.id AS NVARCHAR(36)) AS id, m.name, m.description, m.version
+      FROM t_app_process_object m (NOLOCK)
+      JOIN t_application_development a (NOLOCK) ON m.application_id = a.application_id
+      JOIN t_app_process_object_detail d (NOLOCK) ON d.id = m.id AND d.action_type = 1
+      JOIN t_app_process_object ch (NOLOCK) ON d.action_id = ch.id
+      WHERE a.name = @app AND ch.name COLLATE SQL_Latin1_General_CP1_CS_AS = @child ORDER BY m.name`,
+      { child: req.query.childProcess || '', app: req.query.application || 'WA' });
+    send(res, rows);
+  } catch(e) { sendErr(res, e); }
+});
+
+app.get('/api/compare/:id', async (req, res) => {
+  try {
+    const rows = await runQuery(getServer(req), `
+      SELECT c.name, c.description,
+        CASE c.operator_id WHEN 0 THEN '=' WHEN 1 THEN '<>' WHEN 2 THEN '>' WHEN 3 THEN '>=' WHEN 4 THEN '<' WHEN 5 THEN '<=' ELSE 'Op('+CAST(c.operator_id AS VARCHAR)+')' END AS operator_symbol,
+        c.operand1_type, CASE c.operand1_type WHEN 17 THEN COALESCE(f1.name,c.operand1_id) WHEN 18 THEN COALESCE(c1.data_string,CAST(c1.data_number AS NVARCHAR(50)),CAST(c1.data_datetime AS NVARCHAR(50))) WHEN 19 THEN COALESCE(r1.name,c.operand1_id) WHEN -1 THEN 'Current Row' ELSE NULL END AS operand1_name,
+        c.operand2_type, CASE c.operand2_type WHEN 17 THEN COALESCE(f2.name,c.operand2_id) WHEN 18 THEN COALESCE(c2.data_string,CAST(c2.data_number AS NVARCHAR(50)),CAST(c2.data_datetime AS NVARCHAR(50))) WHEN 19 THEN COALESCE(r2.name,c.operand2_id) WHEN -1 THEN 'Current Row' ELSE NULL END AS operand2_name
+      FROM t_act_compare c (NOLOCK)
+      LEFT JOIN t_app_field f1 (NOLOCK) ON c.operand1_type=17 AND c.operand1_id=f1.id
+      LEFT JOIN t_app_record r1 (NOLOCK) ON c.operand1_type=19 AND c.operand1_id=r1.id
+      LEFT JOIN t_app_constant c1 (NOLOCK) ON c.operand1_type=18 AND c.operand1_id=c1.id
+      LEFT JOIN t_app_field f2 (NOLOCK) ON c.operand2_type=17 AND c.operand2_id=f2.id
+      LEFT JOIN t_app_record r2 (NOLOCK) ON c.operand2_type=19 AND c.operand2_id=r2.id
+      LEFT JOIN t_app_constant c2 (NOLOCK) ON c.operand2_type=18 AND c.operand2_id=c2.id
+      WHERE c.id = @id`, { id: req.params.id });
+    send(res, rows);
+  } catch(e) { sendErr(res, e); }
+});
+
+app.get('/api/calc/:id', async (req, res) => {
+  try {
+    const rows = await runQuery(getServer(req), `
+      SELECT c.name, c.description, cd.sequence,
+        CASE cd.operator_id WHEN 0 THEN '+' WHEN 1 THEN '-' WHEN 2 THEN '*' WHEN 3 THEN '/' WHEN 4 THEN '%' WHEN 5 THEN '&' WHEN 6 THEN 'Mid' WHEN 7 THEN 'Search' WHEN 8 THEN 'Len' WHEN 9 THEN ':=' WHEN 13 THEN 'Date+' WHEN 19 THEN 'Date-' ELSE 'Op('+CAST(cd.operator_id AS VARCHAR)+')' END AS operator_symbol,
+        cd.result_type,   COALESCE(rf.name,rr.name) AS result_name,
+        cd.operand1_type, CASE cd.operand1_type WHEN 18 THEN COALESCE(c1.data_string,CAST(c1.data_number AS NVARCHAR(50)),CAST(c1.data_datetime AS NVARCHAR(50))) WHEN -1 THEN 'Current Row' ELSE COALESCE(f1.name,r1.name) END AS operand1_name,
+        cd.operand2_type, CASE cd.operand2_type WHEN 18 THEN COALESCE(c2.data_string,CAST(c2.data_number AS NVARCHAR(50)),CAST(c2.data_datetime AS NVARCHAR(50))) WHEN -1 THEN 'Current Row' ELSE COALESCE(f2.name,r2.name) END AS operand2_name,
+        cd.operand3_type, CASE cd.operand3_type WHEN 18 THEN COALESCE(c3.data_string,CAST(c3.data_number AS NVARCHAR(50)),CAST(c3.data_datetime AS NVARCHAR(50))) WHEN -1 THEN 'Current Row' ELSE COALESCE(f3.name,r3.name) END AS operand3_name
+      FROM t_act_calculate c (NOLOCK)
+      JOIN t_act_calculate_detail cd (NOLOCK) ON c.id=cd.id
+      LEFT JOIN t_app_field rf (NOLOCK) ON cd.result_type=17 AND cd.result_id=rf.id
+      LEFT JOIN t_app_record rr (NOLOCK) ON cd.result_type=19 AND cd.result_id=rr.id
+      LEFT JOIN t_app_field f1 (NOLOCK) ON cd.operand1_type=17 AND cd.operand1_id=f1.id
+      LEFT JOIN t_app_record r1 (NOLOCK) ON cd.operand1_type=19 AND cd.operand1_id=r1.id
+      LEFT JOIN t_app_constant c1 (NOLOCK) ON cd.operand1_type=18 AND cd.operand1_id=c1.id
+      LEFT JOIN t_app_field f2 (NOLOCK) ON cd.operand2_type=17 AND cd.operand2_id=f2.id
+      LEFT JOIN t_app_record r2 (NOLOCK) ON cd.operand2_type=19 AND cd.operand2_id=r2.id
+      LEFT JOIN t_app_constant c2 (NOLOCK) ON cd.operand2_type=18 AND cd.operand2_id=c2.id
+      LEFT JOIN t_app_field f3 (NOLOCK) ON cd.operand3_type=17 AND cd.operand3_id=f3.id
+      LEFT JOIN t_app_record r3 (NOLOCK) ON cd.operand3_type=19 AND cd.operand3_id=r3.id
+      LEFT JOIN t_app_constant c3 (NOLOCK) ON cd.operand3_type=18 AND cd.operand3_id=c3.id
+      WHERE c.id = @id ORDER BY cd.sequence`, { id: req.params.id });
+    send(res, rows);
+  } catch(e) { sendErr(res, e); }
+});
+
+app.get('/api/list/:id', async (req, res) => {
+  try {
+    const rows = await runQuery(getServer(req), `
+      SELECT l.name, l.description, l.find_exact,
+        CASE l.operator_id WHEN 0 THEN 'Get Max' WHEN 1 THEN 'Get Row Number' WHEN 2 THEN 'Add Row' WHEN 3 THEN 'Add Record' WHEN 4 THEN 'Insert Record' WHEN 6 THEN 'Replace Fields' WHEN 8 THEN 'Delete Record' WHEN 9 THEN 'Find' WHEN 11 THEN 'Get First Row' WHEN 12 THEN 'Get Last Row' WHEN 13 THEN 'Get Next Row' WHEN 14 THEN 'Get Previous Row' WHEN 15 THEN 'Get Row' WHEN 16 THEN 'Clear' ELSE 'Unknown('+CAST(l.operator_id AS VARCHAR)+')' END AS operator_name,
+        COALESCE(rl.name,l.list_id) AS list_name,
+        l.operand1_type, CASE l.operand1_type WHEN 17 THEN COALESCE(f1.name,l.operand1_id) WHEN 19 THEN COALESCE(r1.name,l.operand1_id) WHEN -1 THEN 'Current Row' ELSE NULL END AS operand1_name,
+        l.operand2_type, CASE l.operand2_type WHEN 17 THEN COALESCE(f2.name,l.operand2_id) WHEN 19 THEN COALESCE(r2.name,l.operand2_id) WHEN -1 THEN 'Current Row' ELSE NULL END AS operand2_name
+      FROM t_act_list l (NOLOCK)
+      LEFT JOIN t_app_record rl (NOLOCK) ON l.list_id=rl.id
+      LEFT JOIN t_app_field  f1 (NOLOCK) ON l.operand1_type=17 AND l.operand1_id=f1.id
+      LEFT JOIN t_app_record r1 (NOLOCK) ON l.operand1_type=19 AND l.operand1_id=r1.id
+      LEFT JOIN t_app_field  f2 (NOLOCK) ON l.operand2_type=17 AND l.operand2_id=f2.id
+      LEFT JOIN t_app_record r2 (NOLOCK) ON l.operand2_type=19 AND l.operand2_id=r2.id
+      WHERE l.id = @id`, { id: req.params.id });
+    send(res, rows);
+  } catch(e) { sendErr(res, e); }
+});
+
+app.get('/api/dialog/:id', async (req, res) => {
+  try {
+    const rows = await runQuery(getServer(req), `
+      SELECT d.name, d.description, dd.sequence,
+        COALESCE(ff.name,fr.name,dd.field_id) AS field_name,
+        CASE dd.field_type WHEN 17 THEN 'Field' WHEN 19 THEN 'Record' ELSE '' END AS field_type_name,
+        COALESCE(pf.name,pc.value,pr.name, CASE WHEN dd.prompt_type IN (-1,0) THEN '' ELSE dd.prompt_id END) AS prompt_name,
+        CASE dd.prompt_type WHEN 17 THEN 'Field' WHEN 18 THEN 'Const' WHEN 21 THEN 'Resource' ELSE '' END AS prompt_type_name,
+        COALESCE(pv.name, CASE WHEN dd.validation_type IN (-1,0) THEN '' ELSE dd.validation_id END) AS validation_name,
+        CASE dd.validation_type WHEN 1 THEN 'Process' ELSE '' END AS validation_type_name,
+        dd.required, dd.clear_initially
+      FROM t_act_dialog d (NOLOCK)
+      JOIN t_act_dialog_detail dd (NOLOCK) ON d.id=dd.id
+      LEFT JOIN t_app_field    ff (NOLOCK) ON dd.field_type=17 AND dd.field_id=ff.id
+      LEFT JOIN t_app_record   fr (NOLOCK) ON dd.field_type=19 AND dd.field_id=fr.id
+      LEFT JOIN t_app_field    pf (NOLOCK) ON dd.prompt_type=17 AND dd.prompt_id=pf.id
+      LEFT JOIN t_app_constant pc (NOLOCK) ON dd.prompt_type=18 AND dd.prompt_id=pc.id
+      LEFT JOIN t_resource     pr (NOLOCK) ON dd.prompt_type=21 AND dd.prompt_id=pr.id
+      LEFT JOIN t_app_process_object pv (NOLOCK) ON dd.validation_type=1 AND dd.validation_id=pv.id
+      WHERE d.id = @id ORDER BY dd.sequence`, { id: req.params.id });
+    send(res, rows);
+  } catch(e) { sendErr(res, e); }
+});
+
+app.get('/api/db/:id', async (req, res) => {
+  try {
+    let rows = await runQuery(getServer(req), `
+      SELECT dm.name, dm.description, dd.sequence, dd.provider_type,
+             CAST(dd.statement AS NVARCHAR(MAX)) AS statement
+      FROM t_act_database dm (NOLOCK)
+      JOIN t_act_database_detail dd (NOLOCK) ON dd.id=dm.id
+      JOIN t_application_development a (NOLOCK) ON dm.application_id=a.application_id
+      WHERE dm.id = @id ORDER BY dd.sequence`, { id: req.params.id });
+    rows = await resolveGuids(getServer(req), rows);
+    send(res, rows);
+  } catch(e) { sendErr(res, e); }
+});
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+app.listen(PORT, () => {
+  console.log(`EAR Explorer running at http://localhost:${PORT}`);
+  const { exec } = require('child_process');
+  exec(`start http://localhost:${PORT}`);
+});

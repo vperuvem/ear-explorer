@@ -1,5 +1,5 @@
 ﻿# EAR Explorer - PowerShell HTTP Server
-$Port              = 8080
+$Port              = 9000
 $Database          = 'EAR'
 $IndexHtml         = Join-Path $PSScriptRoot 'public\index.html'
 $AllowedServers    = @('ArcadiaWHJSqlStage','RetailRHjsqldev','RetailRHjsqlStage')
