@@ -354,6 +354,44 @@ app.post('/api/tests/run', (req, res) => {
   res.json({ status: 'started' });
 });
 
+// ── Tester: reachable dialogs from an entry-point process ─────────────────────
+app.get('/api/tester/dialogs', async (req, res) => {
+  try {
+    const rows = await runQuery(getServer(req), `
+      WITH CallGraph AS (
+        SELECT CAST(m.id AS NVARCHAR(36)) AS proc_id,
+               CAST(m.name AS NVARCHAR(4000)) AS path,
+               CAST(N',' + CAST(m.id AS NVARCHAR(36)) + N',' AS NVARCHAR(4000)) AS visited
+        FROM t_app_process_object m (NOLOCK)
+        JOIN t_application_development a (NOLOCK) ON m.application_id = a.application_id
+        WHERE m.id = @entryId AND a.name = @app
+        UNION ALL
+        SELECT CAST(child.id AS NVARCHAR(36)),
+               CAST(cg.path + N' \u2192 ' + child.name AS NVARCHAR(4000)),
+               CAST(cg.visited + CAST(child.id AS NVARCHAR(36)) + N',' AS NVARCHAR(4000))
+        FROM CallGraph cg
+        JOIN t_app_process_object_detail d (NOLOCK)
+          ON d.id = cg.proc_id AND d.action_type = 1 AND d.commented_out = 0
+        JOIN t_app_process_object child (NOLOCK) ON child.id = d.action_id
+        JOIN t_application_development a (NOLOCK)
+          ON child.application_id = a.application_id AND a.name = @app
+        WHERE CHARINDEX(N',' + CAST(child.id AS NVARCHAR(36)) + N',', cg.visited) = 0
+      )
+      SELECT DISTINCT
+        dlg.name  AS dialog_name,
+        CAST(dlg.id AS NVARCHAR(36)) AS dialog_id,
+        cg.path   AS call_path
+      FROM CallGraph cg
+      JOIN t_app_process_object_detail d (NOLOCK)
+        ON d.id = cg.proc_id AND d.action_type = 6 AND d.commented_out = 0
+      JOIN t_act_dialog dlg (NOLOCK) ON dlg.id = d.action_id
+      ORDER BY dlg.name, cg.path
+      OPTION (MAXRECURSION 100)`,
+      { entryId: req.query.entry || '', app: req.query.app || 'WA' });
+    send(res, rows);
+  } catch(e) { sendErr(res, e); }
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 const { exec } = require('child_process');
 http.createServer(app).listen(PORT, () => {

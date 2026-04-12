@@ -67,6 +67,25 @@
   .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #c4b5fd;
              border-top-color: #7c3aed; border-radius: 50%; animation: spin 0.7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Reachable dialogs */
+  .dlg-section { margin-top: 18px; }
+  .dlg-hdr { font-size: 0.75rem; font-weight: 700; color: #6d28d9; text-transform: uppercase;
+             letter-spacing: 0.07em; margin-bottom: 8px; }
+  .chip-grid { display: flex; flex-wrap: wrap; gap: 7px; }
+  .dlg-chip { background: #ede9fe; color: #4c1d95; border: 1.5px solid #c4b5fd;
+              border-radius: 20px; padding: 3px 12px; font-size: 0.8rem; font-weight: 600;
+              cursor: default; white-space: nowrap; user-select: none; transition: background 0.1s; }
+  .dlg-chip:hover { background: #ddd6fe; border-color: #7c3aed; }
+
+  /* Hover path tooltip */
+  .path-tip { position: fixed; background: #1e1b4b; color: #e0e7ff; border-radius: 8px;
+              padding: 10px 14px; font-size: 0.76rem; max-width: 540px; z-index: 9999;
+              pointer-events: none; display: none; line-height: 1.7;
+              box-shadow: 0 6px 24px rgba(0,0,0,0.4); }
+  .path-tip b { display: block; font-size: 0.82rem; margin-bottom: 6px; color: #c4b5fd; }
+  .path-row { display: block; }
+  .path-row + .path-row { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 2px; }
 </style>
 </head>
 <body>
@@ -113,7 +132,14 @@
     </table>
   </div>
 
+  <div id="dlg-section" class="dlg-section" style="display:none">
+    <div class="dlg-hdr">Reachable Dialogs</div>
+    <div id="dlg-grid" class="chip-grid"></div>
+  </div>
+
 </div>
+
+<div id="path-tip" class="path-tip"></div>
 
 <script>
 let polling = null;
@@ -195,12 +221,83 @@ async function loadResults() {
   }).join('');
 }
 
+// ── Reachable Dialogs ─────────────────────────────────────────────────────────
+let dlgMap = {}; // { dialogName: [path, ...] }
+
+async function loadDialogs() {
+  const sel    = document.getElementById('inp-entry');
+  const entry  = sel.value;
+  const app    = sel.selectedOptions[0]?.dataset.app || '';
+  const server = document.getElementById('inp-server').value;
+  const section = document.getElementById('dlg-section');
+  const grid    = document.getElementById('dlg-grid');
+
+  if (!entry) { section.style.display = 'none'; dlgMap = {}; return; }
+
+  section.style.display = 'block';
+  grid.innerHTML = '<span style="color:#8892a4;font-size:0.8rem">Loading…</span>';
+
+  try {
+    const rows = await (await fetch(
+      `/api/tester/dialogs?server=${encodeURIComponent(server)}&entry=${encodeURIComponent(entry)}&app=${encodeURIComponent(app)}`
+    )).json();
+
+    dlgMap = {};
+    for (const r of rows) {
+      if (!dlgMap[r.dialog_name]) dlgMap[r.dialog_name] = [];
+      dlgMap[r.dialog_name].push(r.call_path);
+    }
+
+    const names = Object.keys(dlgMap).sort();
+    if (!names.length) {
+      grid.innerHTML = '<span style="color:#8892a4;font-size:0.8rem">No dialogs found</span>';
+      return;
+    }
+
+    grid.innerHTML = names.map(n =>
+      `<span class="dlg-chip" data-name="${esc(n)}">${esc(n)}</span>`
+    ).join('');
+
+    grid.querySelectorAll('.dlg-chip').forEach(c => {
+      c.addEventListener('mouseenter', showTip);
+      c.addEventListener('mousemove',  moveTip);
+      c.addEventListener('mouseleave', hideTip);
+    });
+  } catch(e) {
+    grid.innerHTML = '<span style="color:#dc2626;font-size:0.8rem">Error loading dialogs</span>';
+  }
+}
+
+const tip = document.getElementById('path-tip');
+
+function showTip(e) {
+  const name  = e.currentTarget.dataset.name;
+  const paths = dlgMap[name] || [];
+  tip.innerHTML = `<b>${esc(name)}</b>` +
+    paths.map(p => `<span class="path-row">\u21b3 ${esc(p)}</span>`).join('');
+  moveTip(e);
+  tip.style.display = 'block';
+}
+
+function moveTip(e) {
+  let x = e.clientX + 16, y = e.clientY + 16;
+  if (x + 560 > window.innerWidth)  x = e.clientX - 560;
+  if (y + tip.offsetHeight + 10 > window.innerHeight) y = e.clientY - tip.offsetHeight - 10;
+  tip.style.left = x + 'px';
+  tip.style.top  = y + 'px';
+}
+
+function hideTip() { tip.style.display = 'none'; }
+
 // Auto-load on open
-loadEntryPoints();
+loadEntryPoints().then(loadDialogs);
 loadResults();
 
-// Refresh entry points when server changes
-document.getElementById('inp-server').addEventListener('change', loadEntryPoints);
+// Refresh entry points + dialogs when server changes
+document.getElementById('inp-server').addEventListener('change', () => loadEntryPoints().then(loadDialogs));
+
+// Reload dialogs when entry point changes
+document.getElementById('inp-entry').addEventListener('change', loadDialogs);
 </script>
 </body>
 </html>
