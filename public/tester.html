@@ -82,6 +82,8 @@
   <span class="stat-chip pass-chip"><span class="num" id="stat-pass">—</span><span class="lbl">PASS</span></span>
   <span class="stat-chip fail-chip"><span class="num" id="stat-fail">—</span><span class="lbl">FAIL</span></span>
   <span class="stat-chip tot-chip" ><span class="num" id="stat-tot" >—</span><span class="lbl">TOTAL</span></span>
+  <span id="stat-time" class="run-at"></span>
+  <span id="stat-url"  class="run-at" style="color:#4338ca;"></span>
   <a class="nav-link" href="http://localhost:9000" target="_blank">Explorer</a>
   <select id="inp-server" style="margin-left:auto; font-size:0.8rem; border:1.5px solid #c4b5fd;
           border-radius:6px; padding:3px 8px; background:#f5f3ff; color:#1e1b4b; font-weight:600;">
@@ -92,11 +94,6 @@
 </header>
 
 <div class="content">
-
-  <div style="display:flex;gap:16px;align-items:baseline;margin-bottom:6px;flex-wrap:wrap;">
-    <span id="stat-time" class="run-at">No runs yet</span>
-    <span id="stat-url"  class="run-at" style="color:#4338ca;"></span>
-  </div>
 
   <div class="grid-wrap">
     <table id="results-table">
