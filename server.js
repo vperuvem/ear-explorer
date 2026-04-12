@@ -209,7 +209,7 @@ app.get('/api/callers', async (req, res) => {
   } catch(e) { sendErr(res, e); }
 });
 
-app.get('/api/callerObjects', async (req, res) => {
+app.get('/api/caller-objects', async (req, res) => {
   try {
     const rows = await runQuery(getServer(req), `
       SELECT DISTINCT CAST(m.id AS NVARCHAR(36)) AS id, m.name, m.description, m.version
@@ -223,7 +223,7 @@ app.get('/api/callerObjects', async (req, res) => {
   } catch(e) { sendErr(res, e); }
 });
 
-app.get('/api/compare/:id', async (req, res) => {
+app.get('/api/compare-action/:id', async (req, res) => {
   try {
     const rows = await runQuery(getServer(req), `
       SELECT c.name, c.description,
@@ -242,7 +242,7 @@ app.get('/api/compare/:id', async (req, res) => {
   } catch(e) { sendErr(res, e); }
 });
 
-app.get('/api/calc/:id', async (req, res) => {
+app.get('/api/calc-action/:id', async (req, res) => {
   try {
     const rows = await runQuery(getServer(req), `
       SELECT c.name, c.description, cd.sequence,
@@ -269,7 +269,7 @@ app.get('/api/calc/:id', async (req, res) => {
   } catch(e) { sendErr(res, e); }
 });
 
-app.get('/api/list/:id', async (req, res) => {
+app.get('/api/list-action/:id', async (req, res) => {
   try {
     const rows = await runQuery(getServer(req), `
       SELECT l.name, l.description, l.find_exact,
@@ -288,7 +288,7 @@ app.get('/api/list/:id', async (req, res) => {
   } catch(e) { sendErr(res, e); }
 });
 
-app.get('/api/dialog/:id', async (req, res) => {
+app.get('/api/dialog-action/:id', async (req, res) => {
   try {
     const rows = await runQuery(getServer(req), `
       SELECT d.name, d.description, dd.sequence,
@@ -312,7 +312,7 @@ app.get('/api/dialog/:id', async (req, res) => {
   } catch(e) { sendErr(res, e); }
 });
 
-app.get('/api/db/:id', async (req, res) => {
+app.get('/api/db-action/:id', async (req, res) => {
   try {
     let rows = await runQuery(getServer(req), `
       SELECT dm.name, dm.description, dd.sequence, dd.provider_type,
@@ -354,8 +354,118 @@ app.post('/api/tests/run', (req, res) => {
   res.json({ status: 'started' });
 });
 
+// ── Graph cache — Q1-Q4 results keyed by server|app, TTL 15 min ───────────────
+// Q1-Q4 are independent of the entry-point; only BFS varies per entry.
+// Caching means switching entry points costs <5 ms instead of ~2 s.
+const graphCache = new Map();
+const GRAPH_TTL  = 15 * 60 * 1000; // 15 minutes
+
+async function getGraph(server, app) {
+  const key    = `${server}|${app}`;
+  const cached = graphCache.get(key);
+  if (cached && (Date.now() - cached.ts) < GRAPH_TTL) {
+    console.log(`[graph] cache hit  key=${key}`);
+    return cached;
+  }
+
+  const t0 = Date.now();
+  console.log(`[graph] building   key=${key}`);
+
+  // Q1 — subprocess call edges (action_type=1)
+  const edges = await runQuery(server, `
+    SELECT DISTINCT
+      UPPER(CAST(d.id        AS NVARCHAR(36))) AS parent_id,
+      UPPER(CAST(d.action_id AS NVARCHAR(36))) AS child_id,
+      child.name AS child_name,
+      m.name     AS parent_name
+    FROM t_app_process_object_detail d (NOLOCK)
+    JOIN t_app_process_object m     (NOLOCK) ON m.id = d.id
+    JOIN t_app_process_object child (NOLOCK) ON child.id = d.action_id
+    JOIN t_application_development  a (NOLOCK) ON m.application_id = a.application_id
+    WHERE d.action_type = 1 AND d.commented_out = 0 AND a.name = @app`, { app });
+  console.log(`[graph] Q1 edges=${edges.length} ${Date.now()-t0}ms`);
+
+  // Q2 — dialog steps (action_type=6)
+  const dlgEdges = await runQuery(server, `
+    SELECT DISTINCT
+      UPPER(CAST(d.id   AS NVARCHAR(36))) AS proc_id,
+      m.name                              AS proc_name,
+      dlg.name                            AS dialog_name,
+      UPPER(CAST(dlg.id AS NVARCHAR(36))) AS dialog_id
+    FROM t_app_process_object_detail d (NOLOCK)
+    JOIN t_act_dialog               dlg (NOLOCK) ON dlg.id = d.action_id
+    JOIN t_app_process_object       m   (NOLOCK) ON m.id = d.id
+    JOIN t_application_development  a   (NOLOCK) ON m.application_id = a.application_id
+    WHERE d.action_type = 6 AND d.commented_out = 0 AND a.name = @app`, { app });
+  console.log(`[graph] Q2 dlgs=${dlgEdges.length} ${Date.now()-t0}ms`);
+
+  // Build adjacency + nameOf
+  const adjacency = new Map();
+  const nameOf    = new Map();
+  for (const e of edges) {
+    nameOf.set(e.parent_id, e.parent_name);
+    nameOf.set(e.child_id,  e.child_name);
+    if (!adjacency.has(e.parent_id)) adjacency.set(e.parent_id, []);
+    adjacency.get(e.parent_id).push({ childId: e.child_id });
+  }
+  for (const d of dlgEdges) nameOf.set(d.proc_id, d.proc_name);
+
+  // Q3 — menu-invoker processes (DB calls referencing t_menu)
+  const menuInvokers = await runQuery(server, `
+    SELECT DISTINCT
+      UPPER(CAST(m.id AS NVARCHAR(36))) AS proc_id,
+      m.name                            AS proc_name,
+      CAST(dd.statement AS NVARCHAR(MAX)) AS stmt
+    FROM t_app_process_object_detail d (NOLOCK)
+    JOIN t_app_process_object      m  (NOLOCK) ON m.id = d.id
+    JOIN t_application_development a  (NOLOCK) ON m.application_id = a.application_id
+    JOIN t_act_database            db (NOLOCK) ON db.id = d.action_id AND d.action_type = 5
+    JOIN t_act_database_detail     dd (NOLOCK) ON dd.id = db.id
+    WHERE a.name = @app AND d.commented_out = 0
+      AND CAST(dd.statement AS NVARCHAR(MAX)) LIKE '%t_menu%'`, { app });
+  console.log(`[graph] Q3 menu_invokers=${menuInvokers.length} ${Date.now()-t0}ms`);
+
+  // Q4 — _-prefixed menu templates with their visible item texts
+  const menuTargetRows = menuInvokers.length ? await runQuery(server, `
+    SELECT DISTINCT tm.process AS menu_name, tm.text AS item_text
+    FROM AAD.dbo.t_menu tm (NOLOCK)
+    WHERE tm.process LIKE '[_]%' AND tm.text IS NOT NULL AND LEN(TRIM(tm.text)) > 0
+    ORDER BY tm.process, tm.text`, {}) : [];
+  console.log(`[graph] Q4 menu_items=${menuTargetRows.length} ${Date.now()-t0}ms`);
+
+  // textsByMenu: menu_name → Set of item texts
+  const textsByMenu = new Map();
+  for (const r of menuTargetRows) {
+    if (!textsByMenu.has(r.menu_name)) textsByMenu.set(r.menu_name, new Set());
+    textsByMenu.get(r.menu_name).add(r.item_text);
+  }
+
+  // Inject virtual MENU:_Name nodes into adjacency
+  if (menuTargetRows.length) {
+    for (const inv of menuInvokers) {
+      const allMenus   = [...textsByMenu.keys()];
+      const specific   = allMenus.filter(mn => inv.stmt && inv.stmt.includes(mn));
+      const menusToAdd = specific.length ? specific : allMenus;
+      for (const menuName of menusToAdd) {
+        const vid = 'MENU:' + menuName;
+        nameOf.set(vid, menuName);
+        if (!adjacency.has(inv.proc_id)) adjacency.set(inv.proc_id, []);
+        if (!adjacency.get(inv.proc_id).some(x => x.childId === vid))
+          adjacency.get(inv.proc_id).push({ childId: vid });
+        if (!adjacency.has(vid)) adjacency.set(vid, []);
+      }
+    }
+    console.log(`[graph] menu nodes injected=${[...textsByMenu.keys()].length} ${Date.now()-t0}ms`);
+  }
+
+  const graph = { adjacency, nameOf, dlgEdges, textsByMenu, ts: Date.now() };
+  graphCache.set(key, graph);
+  console.log(`[graph] cached key=${key} total=${Date.now()-t0}ms`);
+  return graph;
+}
+
 // ── Tester: reachable dialogs from an entry-point process ─────────────────────
-// Two bulk SQL queries for the whole app, then BFS entirely in JS — fast.
+// Graph (Q1-Q4) is cached per server|app — only BFS re-runs per entry change.
 app.get('/api/tester/dialogs', async (req, res) => {
   try {
     const server  = getServer(req);
@@ -365,7 +475,82 @@ app.get('/api/tester/dialogs', async (req, res) => {
 
     const t0 = Date.now();
     console.log(`[dialogs] start entry=${entryId} app=${app}`);
-    // Query 1 — all sub-process call edges in the app (action_type=1)
+
+    const { adjacency, nameOf, dlgEdges, textsByMenu } = await getGraph(server, app);
+
+    // BFS from entry point — track one parent per node (shortest path)
+    const parentOf = new Map([[entryId, null]]);
+    const queue    = [entryId];
+    while (queue.length) {
+      const procId   = queue.shift();
+      for (const { childId } of (adjacency.get(procId) || [])) {
+        if (!parentOf.has(childId)) { parentOf.set(childId, procId); queue.push(childId); }
+      }
+    }
+
+    // Reconstruct path string by walking parent pointers
+    function pathTo(id) {
+      const parts = [];
+      let cur = id;
+      while (cur != null) { parts.unshift(nameOf.get(cur) || cur); cur = parentOf.get(cur); }
+      return parts.join(' \u2192 ');
+    }
+
+    // Regular dialogs reachable from this entry
+    const result = dlgEdges
+      .filter(r => parentOf.has(r.proc_id))
+      .map(r => ({ dialog_name: r.dialog_name, dialog_id: r.dialog_id, call_path: pathTo(r.proc_id), type: 'dialog' }));
+
+    // Dynamic menu rows — path ends with each visible menu-item text
+    for (const [menuName, itemTexts] of textsByMenu) {
+      const vid = 'MENU:' + menuName;
+      if (!parentOf.has(vid)) continue;
+      const prefix = pathTo(vid);
+      for (const itemText of [...itemTexts].sort())
+        result.push({ dialog_name: menuName, dialog_id: null, call_path: prefix + ' \u2192 ' + itemText, type: 'menu' });
+    }
+
+    result.sort((a, b) => a.dialog_name.localeCompare(b.dialog_name) || a.call_path.localeCompare(b.call_path));
+    const mc = result.filter(r => r.type === 'menu').length;
+    console.log(`[dialogs] done reachable=${parentOf.size} dialogs=${result.length - mc} menus=${mc} total=${Date.now()-t0}ms`);
+    send(res, result);
+  } catch(e) { sendErr(res, e); }
+});
+
+// ── Tester: dynamic menu (_-prefixed) calls reachable from an entry-point ─────
+// Strategy: query t_menu directly for ALL _-prefixed menus whose target processes
+// exist in this app.  BFS is used only to identify which reachable processes could
+// be callers — we no longer require the menu to appear as an explicit action_type=1 edge.
+app.get('/api/tester/dynamic-menus', async (req, res) => {
+  try {
+    const server  = getServer(req);
+    const appName = req.query.app || 'WA';
+    const entryId = (req.query.entry || '').toUpperCase();
+    if (!entryId) return send(res, []);
+
+    const t0 = Date.now();
+    console.log(`[dynmenus] start entry=${entryId} app=${appName}`);
+
+    // Q1 — all _-prefixed menus from t_menu (no app filter — menus are global in AAD)
+    const menuRows = await runQuery(server, `
+      SELECT DISTINCT
+        tm.process   AS dyn_proc,
+        tm.area_id,
+        tm.menu_level,
+        tm.sequence,
+        tm.text,
+        tm.name      AS target_name
+      FROM AAD.dbo.t_menu tm (NOLOCK)
+      WHERE tm.process LIKE '[_]%'
+      ORDER BY tm.process, tm.area_id, tm.sequence`, {});
+    console.log(`[dynmenus] Q1 menus=${menuRows.length} ${Date.now()-t0}ms`);
+
+    if (!menuRows.length) {
+      console.log(`[dynmenus] no dynamic menus found for app=${appName} ${Date.now()-t0}ms`);
+      return send(res, []);
+    }
+
+    // Q2 — all subprocess call edges (action_type=1) for BFS to find reachable callers
     const edges = await runQuery(server, `
       SELECT DISTINCT
         UPPER(CAST(d.id        AS NVARCHAR(36))) AS parent_id,
@@ -376,63 +561,115 @@ app.get('/api/tester/dialogs', async (req, res) => {
       JOIN t_app_process_object m     (NOLOCK) ON m.id = d.id
       JOIN t_app_process_object child (NOLOCK) ON child.id = d.action_id
       JOIN t_application_development  a (NOLOCK) ON m.application_id = a.application_id
-      WHERE d.action_type = 1 AND d.commented_out = 0 AND a.name = @app`, { app });
-    console.log(`[dialogs] Q1 edges=${edges.length} ${Date.now()-t0}ms`);
+      WHERE d.action_type = 1 AND d.commented_out = 0 AND a.name = @app`, { app: appName });
+    console.log(`[dynmenus] Q2 edges=${edges.length} ${Date.now()-t0}ms`);
 
-    // Query 2 — all dialog steps in the app (action_type=6)
-    const dlgEdges = await runQuery(server, `
-      SELECT DISTINCT
-        UPPER(CAST(d.id   AS NVARCHAR(36))) AS proc_id,
-        dlg.name                            AS dialog_name,
-        UPPER(CAST(dlg.id AS NVARCHAR(36))) AS dialog_id
-      FROM t_app_process_object_detail d (NOLOCK)
-      JOIN t_act_dialog               dlg (NOLOCK) ON dlg.id = d.action_id
-      JOIN t_app_process_object       m   (NOLOCK) ON m.id = d.id
-      JOIN t_application_development  a   (NOLOCK) ON m.application_id = a.application_id
-      WHERE d.action_type = 6 AND d.commented_out = 0 AND a.name = @app`, { app });
-    console.log(`[dialogs] Q2 dlgs=${dlgEdges.length} ${Date.now()-t0}ms`);
-
-    // Build adjacency & name maps from edges
-    const adjacency = new Map(); // parentId → [{ childId, childName }]
-    const nameOf    = new Map(); // procId → name
+    // BFS from entry point to find reachable process IDs and paths
+    const adjacency = new Map();
+    const nameOf    = new Map();
     for (const e of edges) {
       nameOf.set(e.parent_id, e.parent_name);
       nameOf.set(e.child_id,  e.child_name);
       if (!adjacency.has(e.parent_id)) adjacency.set(e.parent_id, []);
-      adjacency.get(e.parent_id).push({ childId: e.child_id });
+      adjacency.get(e.parent_id).push(e.child_id);
     }
-
-    // BFS from entry point — track one parent per node (shortest path)
     const parentOf = new Map([[entryId, null]]);
     const queue    = [entryId];
     while (queue.length) {
-      const procId   = queue.shift();
-      const children = adjacency.get(procId) || [];
-      for (const { childId } of children) {
-        if (!parentOf.has(childId)) {
-          parentOf.set(childId, procId);
-          queue.push(childId);
-        }
+      const id = queue.shift();
+      for (const cid of (adjacency.get(id) || [])) {
+        if (!parentOf.has(cid)) { parentOf.set(cid, id); queue.push(cid); }
       }
     }
-
-    // Reconstruct path string by walking parent pointers
-    function pathTo(procId) {
-      const parts = [];
-      let cur = procId;
-      while (cur !== undefined && cur !== null) {
-        parts.unshift(nameOf.get(cur) || cur);
-        cur = parentOf.get(cur);
-      }
+    function pathTo(id) {
+      const parts = []; let cur = id;
+      while (cur != null) { parts.unshift(nameOf.get(cur) || cur); cur = parentOf.get(cur); }
       return parts.join(' \u2192 ');
     }
 
-    // Keep only dialogs in reachable processes
-    const result = dlgEdges
-      .filter(r => parentOf.has(r.proc_id))
-      .map(r => ({ dialog_name: r.dialog_name, dialog_id: r.dialog_id, call_path: pathTo(r.proc_id) }));
-    result.sort((a, b) => a.dialog_name.localeCompare(b.dialog_name) || a.call_path.localeCompare(b.call_path));
-    console.log(`[dialogs] done reachable=${parentOf.size} dialogs=${result.length} ${Date.now()-t0}ms`);
+    // Q3 — all dialog steps in the app so we can map target process → screens
+    const dlgEdges = await runQuery(server, `
+      SELECT DISTINCT
+        UPPER(CAST(d.id   AS NVARCHAR(36))) AS proc_id,
+        m.name                              AS proc_name,
+        dlg.name                            AS dialog_name
+      FROM t_app_process_object_detail d (NOLOCK)
+      JOIN t_act_dialog               dlg (NOLOCK) ON dlg.id = d.action_id
+      JOIN t_app_process_object       m   (NOLOCK) ON m.id = d.id
+      JOIN t_application_development  a   (NOLOCK) ON m.application_id = a.application_id
+      WHERE d.action_type = 6 AND d.commented_out = 0 AND a.name = @app`, { app: appName });
+    console.log(`[dynmenus] Q3 dlgs=${dlgEdges.length} ${Date.now()-t0}ms`);
+
+    // Build maps: proc_name → proc_id(s), proc_id → dialog_names
+    const idsByName  = new Map(); // proc_name → [proc_id, ...]
+    const dlgsByProc = new Map(); // proc_id   → Set<dialog_name>
+    for (const d of dlgEdges) {
+      if (!idsByName.has(d.proc_name)) idsByName.set(d.proc_name, []);
+      if (!idsByName.get(d.proc_name).includes(d.proc_id)) idsByName.get(d.proc_name).push(d.proc_id);
+      if (!dlgsByProc.has(d.proc_id)) dlgsByProc.set(d.proc_id, new Set());
+      dlgsByProc.get(d.proc_id).add(d.dialog_name);
+    }
+
+    // Helper — dialogs directly on a named process
+    function dialogsFor(procName) {
+      const ids = idsByName.get(procName) || [];
+      const out = new Set();
+      for (const id of ids) for (const d of (dlgsByProc.get(id) || [])) out.add(d);
+      return [...out].sort();
+    }
+
+    // Helper — BFS path from entry to a named target process (via existing parentOf)
+    function pathToName(procName) {
+      const ids = idsByName.get(procName) || [];
+      // pick the one that is reachable (shortest BFS path)
+      let best = null;
+      for (const id of ids) {
+        if (parentOf.has(id)) { best = id; break; }
+      }
+      return best ? pathTo(best) : '';
+    }
+
+    // Group menu options by dyn_proc — deduplicate by distinct target_name, enrich with path+dialogs
+    const menuByProc = {};
+    const seenOpt    = new Set();
+    for (const r of menuRows) {
+      const optKey = `${r.dyn_proc}|${r.target_name}`;
+      if (seenOpt.has(optKey)) continue;
+      seenOpt.add(optKey);
+      if (!menuByProc[r.dyn_proc]) menuByProc[r.dyn_proc] = [];
+      menuByProc[r.dyn_proc].push({
+        area:    r.area_id,
+        level:   r.menu_level,
+        seq:     r.sequence,
+        text:    r.text,
+        target:  r.target_name,
+        path:    pathToName(r.target_name),
+        dialogs: dialogsFor(r.target_name),
+      });
+    }
+
+    // For each _-menu, find reachable processes that explicitly call it via action_type=1
+    // Deduplicate by distinct parent_id (same process may call the menu in multiple steps)
+    const callersOf  = {}; // dyn_proc_name → [{ caller, call_path }]
+    const seenCaller = new Set();
+    for (const e of edges) {
+      if (!e.child_name.startsWith('_')) continue;
+      if (!parentOf.has(e.parent_id))   continue;
+      const callerKey = `${e.child_name}|${e.parent_id}`;
+      if (seenCaller.has(callerKey)) continue;
+      seenCaller.add(callerKey);
+      if (!callersOf[e.child_name]) callersOf[e.child_name] = [];
+      callersOf[e.child_name].push({ caller: e.parent_name, call_path: pathTo(e.parent_id) });
+    }
+
+    // Build result — one row per distinct _-menu
+    const result = Object.keys(menuByProc).sort().map(proc => ({
+      dyn_proc:     proc,
+      callers:      callersOf[proc] || [],
+      menu_options: menuByProc[proc],
+    }));
+
+    console.log(`[dynmenus] done menus=${result.length} ${Date.now()-t0}ms`);
     send(res, result);
   } catch(e) { sendErr(res, e); }
 });
