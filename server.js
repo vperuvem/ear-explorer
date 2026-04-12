@@ -355,40 +355,85 @@ app.post('/api/tests/run', (req, res) => {
 });
 
 // ── Tester: reachable dialogs from an entry-point process ─────────────────────
+// Two bulk SQL queries for the whole app, then BFS entirely in JS — fast.
 app.get('/api/tester/dialogs', async (req, res) => {
   try {
-    const rows = await runQuery(getServer(req), `
-      WITH CallGraph AS (
-        SELECT CAST(m.id AS NVARCHAR(36)) AS proc_id,
-               CAST(m.name AS NVARCHAR(4000)) AS path,
-               CAST(N',' + CAST(m.id AS NVARCHAR(36)) + N',' AS NVARCHAR(4000)) AS visited
-        FROM t_app_process_object m (NOLOCK)
-        JOIN t_application_development a (NOLOCK) ON m.application_id = a.application_id
-        WHERE m.id = @entryId AND a.name = @app
-        UNION ALL
-        SELECT CAST(child.id AS NVARCHAR(36)),
-               CAST(cg.path + N' \u2192 ' + child.name AS NVARCHAR(4000)),
-               CAST(cg.visited + CAST(child.id AS NVARCHAR(36)) + N',' AS NVARCHAR(4000))
-        FROM CallGraph cg
-        JOIN t_app_process_object_detail d (NOLOCK)
-          ON d.id = cg.proc_id AND d.action_type = 1 AND d.commented_out = 0
-        JOIN t_app_process_object child (NOLOCK) ON child.id = d.action_id
-        JOIN t_application_development a (NOLOCK)
-          ON child.application_id = a.application_id AND a.name = @app
-        WHERE CHARINDEX(N',' + CAST(child.id AS NVARCHAR(36)) + N',', cg.visited) = 0
-      )
+    const server  = getServer(req);
+    const app     = req.query.app || 'WA';
+    const entryId = (req.query.entry || '').toUpperCase();
+    if (!entryId) return send(res, []);
+
+    const t0 = Date.now();
+    console.log(`[dialogs] start entry=${entryId} app=${app}`);
+    // Query 1 — all sub-process call edges in the app (action_type=1)
+    const edges = await runQuery(server, `
       SELECT DISTINCT
-        dlg.name  AS dialog_name,
-        CAST(dlg.id AS NVARCHAR(36)) AS dialog_id,
-        cg.path   AS call_path
-      FROM CallGraph cg
-      JOIN t_app_process_object_detail d (NOLOCK)
-        ON d.id = cg.proc_id AND d.action_type = 6 AND d.commented_out = 0
-      JOIN t_act_dialog dlg (NOLOCK) ON dlg.id = d.action_id
-      ORDER BY dlg.name, cg.path
-      OPTION (MAXRECURSION 100)`,
-      { entryId: req.query.entry || '', app: req.query.app || 'WA' });
-    send(res, rows);
+        UPPER(CAST(d.id        AS NVARCHAR(36))) AS parent_id,
+        UPPER(CAST(d.action_id AS NVARCHAR(36))) AS child_id,
+        child.name AS child_name,
+        m.name     AS parent_name
+      FROM t_app_process_object_detail d (NOLOCK)
+      JOIN t_app_process_object m     (NOLOCK) ON m.id = d.id
+      JOIN t_app_process_object child (NOLOCK) ON child.id = d.action_id
+      JOIN t_application_development  a (NOLOCK) ON m.application_id = a.application_id
+      WHERE d.action_type = 1 AND d.commented_out = 0 AND a.name = @app`, { app });
+    console.log(`[dialogs] Q1 edges=${edges.length} ${Date.now()-t0}ms`);
+
+    // Query 2 — all dialog steps in the app (action_type=6)
+    const dlgEdges = await runQuery(server, `
+      SELECT DISTINCT
+        UPPER(CAST(d.id   AS NVARCHAR(36))) AS proc_id,
+        dlg.name                            AS dialog_name,
+        UPPER(CAST(dlg.id AS NVARCHAR(36))) AS dialog_id
+      FROM t_app_process_object_detail d (NOLOCK)
+      JOIN t_act_dialog               dlg (NOLOCK) ON dlg.id = d.action_id
+      JOIN t_app_process_object       m   (NOLOCK) ON m.id = d.id
+      JOIN t_application_development  a   (NOLOCK) ON m.application_id = a.application_id
+      WHERE d.action_type = 6 AND d.commented_out = 0 AND a.name = @app`, { app });
+    console.log(`[dialogs] Q2 dlgs=${dlgEdges.length} ${Date.now()-t0}ms`);
+
+    // Build adjacency & name maps from edges
+    const adjacency = new Map(); // parentId → [{ childId, childName }]
+    const nameOf    = new Map(); // procId → name
+    for (const e of edges) {
+      nameOf.set(e.parent_id, e.parent_name);
+      nameOf.set(e.child_id,  e.child_name);
+      if (!adjacency.has(e.parent_id)) adjacency.set(e.parent_id, []);
+      adjacency.get(e.parent_id).push({ childId: e.child_id });
+    }
+
+    // BFS from entry point — track one parent per node (shortest path)
+    const parentOf = new Map([[entryId, null]]);
+    const queue    = [entryId];
+    while (queue.length) {
+      const procId   = queue.shift();
+      const children = adjacency.get(procId) || [];
+      for (const { childId } of children) {
+        if (!parentOf.has(childId)) {
+          parentOf.set(childId, procId);
+          queue.push(childId);
+        }
+      }
+    }
+
+    // Reconstruct path string by walking parent pointers
+    function pathTo(procId) {
+      const parts = [];
+      let cur = procId;
+      while (cur !== undefined && cur !== null) {
+        parts.unshift(nameOf.get(cur) || cur);
+        cur = parentOf.get(cur);
+      }
+      return parts.join(' \u2192 ');
+    }
+
+    // Keep only dialogs in reachable processes
+    const result = dlgEdges
+      .filter(r => parentOf.has(r.proc_id))
+      .map(r => ({ dialog_name: r.dialog_name, dialog_id: r.dialog_id, call_path: pathTo(r.proc_id) }));
+    result.sort((a, b) => a.dialog_name.localeCompare(b.dialog_name) || a.call_path.localeCompare(b.call_path));
+    console.log(`[dialogs] done reachable=${parentOf.size} dialogs=${result.length} ${Date.now()-t0}ms`);
+    send(res, result);
   } catch(e) { sendErr(res, e); }
 });
 

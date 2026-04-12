@@ -238,9 +238,12 @@ async function loadDialogs() {
   grid.innerHTML = '<span style="color:#8892a4;font-size:0.8rem">Loading…</span>';
 
   try {
-    const rows = await (await fetch(
+    const resp = await fetch(
       `/api/tester/dialogs?server=${encodeURIComponent(server)}&entry=${encodeURIComponent(entry)}&app=${encodeURIComponent(app)}`
-    )).json();
+    );
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const rows = await resp.json();
+    if (!Array.isArray(rows)) throw new Error(rows?.error || 'bad response');
 
     dlgMap = {};
     for (const r of rows) {
