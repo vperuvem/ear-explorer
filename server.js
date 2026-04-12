@@ -346,9 +346,11 @@ app.post('/api/tests/run', (req, res) => {
   testRunning = true;
   const { spawn } = require('child_process');
   const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'Run-Tests.ps1'];
-  if (req.query.virtterm === '1') args.push('-VirtTerm');
-  const proc = spawn('powershell.exe', args, { cwd: TESTER_DIR, shell: false });
-  proc.on('close', () => { testRunning = false; });
+  if (req.query.app)   { args.push('-App');        args.push(req.query.app);   }
+  if (req.query.proc)  { args.push('-EntryPoint'); args.push(req.query.proc);  }
+  if (req.query.entry) { args.push('-DeviceId');   args.push(req.query.entry); }
+  const child = spawn('powershell.exe', args, { cwd: TESTER_DIR, shell: false });
+  child.on('close', () => { testRunning = false; });
   res.json({ status: 'started' });
 });
 

@@ -39,9 +39,11 @@
                   border-radius: 12px; font-size: 0.82rem; font-weight: 700; }
   .status-idle    { background: #d1fae5; color: #065f46; }
   .status-running { background: #fef9c3; color: #854d0e; }
-  label.check { display: inline-flex; align-items: center; gap: 5px; font-size: 0.85rem;
-                font-weight: 600; color: #374151; cursor: pointer; }
-  label.check input { accent-color: #7c3aed; width: 14px; height: 14px; }
+  .entry-label { font-size: 0.83rem; font-weight: 700; color: #374151; white-space: nowrap; }
+  .entry-select { background: #f5f3ff; border: 1.5px solid #c4b5fd; color: #1e1b4b;
+                  padding: 4px 10px; border-radius: 6px; font-size: 0.83rem; min-width: 260px;
+                  max-width: 420px; outline: none; height: 32px; }
+  .entry-select:focus { border-color: #7c3aed; box-shadow: 0 0 0 2px rgba(124,58,237,0.18); }
 
   /* Summary row */
   .summary { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
@@ -92,7 +94,10 @@
   <div class="card">
     <h2>🎛️ Test Controls</h2>
     <div class="controls">
-      <label class="check"><input type="checkbox" id="cb-virtterm"/> VirtTerm Tests</label>
+      <span class="entry-label">Application – Entry Point:</span>
+      <select id="inp-entry" class="entry-select">
+        <option value="">— loading… —</option>
+      </select>
       <button onclick="runTests()">▶ Run Tests</button>
       <button onclick="loadResults()" style="background:#ede9fe;color:#6d28d9;border:1.5px solid #c4b5fd;">⟳ Refresh Results</button>
       <a id="report-link" href="#" target="_blank"
@@ -141,10 +146,28 @@ function esc(s) {
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+async function loadEntryPoints() {
+  const server = document.getElementById('inp-server').value;
+  const sel    = document.getElementById('inp-entry');
+  sel.innerHTML = '<option value="">— loading… —</option>';
+  try {
+    const rows = await (await fetch(`/api/devices?server=${encodeURIComponent(server)}`)).json();
+    if (!rows.length) { sel.innerHTML = '<option value="">— no devices found —</option>'; return; }
+    sel.innerHTML = rows.map(r =>
+      `<option value="${esc(r.id)}" data-app="${esc(r.app_name)}" data-proc="${esc(r.process_name)}" data-type="${esc(r.dev_type)}">` +
+      `${esc(r.app_name)} – ${esc(r.process_name)}  [${esc(r.dev_type)}]</option>`
+    ).join('');
+  } catch(e) { sel.innerHTML = '<option value="">— error loading devices —</option>'; }
+}
+
 async function runTests() {
-  const vt  = document.getElementById('cb-virtterm').checked ? '1' : '0';
-  const res = await fetch(`/api/tests/run?virtterm=${vt}`, { method: 'POST' });
-  const d   = await res.json();
+  const sel   = document.getElementById('inp-entry');
+  const entry = sel.value;
+  const app   = sel.selectedOptions[0]?.dataset.app  || '';
+  const proc  = sel.selectedOptions[0]?.dataset.proc || '';
+  const url   = `/api/tests/run?entry=${encodeURIComponent(entry)}&app=${encodeURIComponent(app)}&proc=${encodeURIComponent(proc)}`;
+  const res   = await fetch(url, { method: 'POST' });
+  const d     = await res.json();
   if (d.status === 'already_running') { alert('Tests already running.'); return; }
   setRunning(true);
   if (!polling) polling = setInterval(checkStatus, 2500);
@@ -195,7 +218,11 @@ async function loadResults() {
 }
 
 // Auto-load on open
+loadEntryPoints();
 loadResults();
+
+// Refresh entry points when server changes
+document.getElementById('inp-server').addEventListener('change', loadEntryPoints);
 </script>
 </body>
 </html>
