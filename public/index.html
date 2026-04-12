@@ -223,14 +223,18 @@
 
 <script>
 const ACTION_COLORS = {
-  '1':'#d1fae5','3':'#e0f2fe','4':'#fce7f3','5':'#fef9c3',
-  '6':'#fef9c3','7':'#fee2e2','9':'#fef9c3','11':'#fce7f3',
-  '12':'#fef3c7','13':'#dbeafe','14':'#ecfccb','19':'#d1fae5','-1':'#ffffff'
+  '1':'#d1fae5','3':'#e0f2fe','4':'#fce7f3', '5':'#fef9c3',
+  '6':'#fef9c3','7':'#fee2e2','9':'#fef9c3', '10':'#e0f7fa',
+  '11':'#fce7f3','12':'#fef3c7','13':'#dbeafe','14':'#ecfccb',
+  '16':'#f3e8ff','17':'#fdf4ff','18':'#f0fdf4','19':'#d1fae5',
+  '-1':'#ffffff'
 };
 const ACTION_LABELS = {
-  '1':'Process','3':'Calculate','4':'Compare','5':'Database',
-  '6':'Dialog','7':'Execute','9':'List','11':'Receive',
-  '12':'Report','13':'Send','14':'User','-1':'Comment'
+  '1':'Process','3':'Calculate','4':'Compare', '5':'Database',
+  '6':'Dialog', '7':'Execute', '9':'List',    '10':'Publish',
+  '11':'Receive','12':'Report','13':'Send',   '14':'User',
+  '16':'Locale','17':'Field',  '18':'Constant','19':'Record',
+  '-1':'Comment'
 };
 
 let allRows    = [];
@@ -467,10 +471,6 @@ function makePassFail(val, r) {
   }
   const t = getLabelTargetSeq(val, r);
   return `<span class="label-link" onclick="event.stopPropagation();jumpToLabel('${val.replace(/'/g,"\\'")}')">↪ ${val}${seqBadge(t)}</span>`;
-}
-
-function esc(str) {
-  return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // HTML-encode any dynamic value before inserting into innerHTML

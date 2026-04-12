@@ -1,5 +1,5 @@
 ﻿# EAR Explorer - PowerShell HTTP Server
-$Port              = 7777
+$Port              = 6789
 $Database          = 'EAR'
 $IndexHtml         = Join-Path $PSScriptRoot 'public\index.html'
 $AllowedServers    = @('ArcadiaWHJSqlStage','RetailRHjsqldev','RetailRHjsqlStage')
@@ -23,7 +23,9 @@ function Invoke-SqlRaw($sql, $params = @{}) {
         $obj = @{}
         foreach ($col in $table.Columns) {
             $v = $row[$col.ColumnName]
-            $obj[$col.ColumnName] = if ($v -is [DBNull]) { $null } else { $v }
+            $obj[$col.ColumnName] = if ($v -is [DBNull]) { $null }
+                                    elseif ($v -is [string]) { $v -replace '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '' }
+                                    else { $v }
         }
         $obj
     }
@@ -37,7 +39,7 @@ function Invoke-Sql($sql, $params = @{}) {
     return ConvertTo-Json -InputObject @($rows) -Depth 3
 }
 
-# Replace :#type#GUID#: placeholders in statement fields with names from t_app_field / t_app_record
+# Replace :#type#GUID#: placeholders in DB statement fields with resolved names.
 # Type 17 -> Field, Type 19 -> Record
 $TYPE_LABELS = @{ '17' = 'Field'; '19' = 'Record' }
 
@@ -126,6 +128,297 @@ function Send-Json($resp, $json) {
     $resp.OutputStream.Write($bytes, 0, $bytes.Length)
 }
 
+# ─── Route Handlers ───────────────────────────────────────────────────────────
+
+function Invoke-StaticHtml($resp) {
+    $html = [System.IO.File]::ReadAllBytes($IndexHtml)
+    $resp.ContentType = 'text/html'
+    $resp.OutputStream.Write($html, 0, $html.Length)
+}
+
+function Build-SearchSql($proc, $app, $types) {
+    $S = "SELECT DISTINCT CAST(m.id AS NVARCHAR(36)) AS id, m.name, m.description, m.version"
+    $J = "FROM t_app_process_object m (NOLOCK) JOIN t_application_development a (NOLOCK) ON m.application_id = a.application_id"
+    $W = "WHERE a.name = @app"
+    $parts = @()
+
+    if ($types -contains '1') {
+        $parts += "$S, '1' AS match_type, m.name AS action_name $J $W AND lower(m.name) LIKE '%'+lower(@proc)+'%'"
+    }
+    if ($types -contains '3') {
+        $parts += "$S, '3' AS match_type, c.name AS action_name
+                   $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=3 AND d.commented_out=0
+                       JOIN t_act_calculate c (NOLOCK) ON c.id=d.action_id
+                   $W AND (lower(c.name) LIKE '%'+lower(@proc)+'%'
+                       OR d.action_id IN (SELECT DISTINCT cd.id FROM t_act_calculate_detail cd (NOLOCK)
+                           LEFT JOIN t_app_field    f1 (NOLOCK) ON cd.operand1_type=17 AND cd.operand1_id=f1.id
+                           LEFT JOIN t_app_field    f2 (NOLOCK) ON cd.operand2_type=17 AND cd.operand2_id=f2.id
+                           LEFT JOIN t_app_field    rf (NOLOCK) ON cd.result_type=17   AND cd.result_id=rf.id
+                           LEFT JOIN t_app_constant c1 (NOLOCK) ON cd.operand1_type=18 AND cd.operand1_id=c1.id
+                           LEFT JOIN t_app_constant c2 (NOLOCK) ON cd.operand2_type=18 AND cd.operand2_id=c2.id
+                           WHERE lower(ISNULL(f1.name,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(f2.name,'')) LIKE '%'+lower(@proc)+'%'
+                              OR lower(ISNULL(rf.name,'')) LIKE '%'+lower(@proc)+'%'
+                              OR lower(ISNULL(c1.data_string,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(c2.data_string,'')) LIKE '%'+lower(@proc)+'%'))"
+    }
+    if ($types -contains '4') {
+        $parts += "$S, '4' AS match_type, c.name AS action_name
+                   $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=4 AND d.commented_out=0
+                       JOIN t_act_compare c (NOLOCK) ON c.id=d.action_id
+                   $W AND (lower(c.name) LIKE '%'+lower(@proc)+'%'
+                       OR d.action_id IN (SELECT cmp.id FROM t_act_compare cmp (NOLOCK)
+                           LEFT JOIN t_app_field    f1 (NOLOCK) ON cmp.operand1_type=17 AND cmp.operand1_id=f1.id
+                           LEFT JOIN t_app_field    f2 (NOLOCK) ON cmp.operand2_type=17 AND cmp.operand2_id=f2.id
+                           LEFT JOIN t_app_constant c1 (NOLOCK) ON cmp.operand1_type=18 AND cmp.operand1_id=c1.id
+                           LEFT JOIN t_app_constant c2 (NOLOCK) ON cmp.operand2_type=18 AND cmp.operand2_id=c2.id
+                           WHERE lower(ISNULL(f1.name,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(f2.name,'')) LIKE '%'+lower(@proc)+'%'
+                              OR lower(ISNULL(c1.data_string,'')) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(c2.data_string,'')) LIKE '%'+lower(@proc)+'%'))"
+    }
+    if ($types -contains '5') {
+        $parts += "$S, '5' AS match_type, c.name AS action_name
+                   $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=5 AND d.commented_out=0
+                       JOIN t_act_database c (NOLOCK) ON c.id=d.action_id
+                   $W AND (lower(c.name) LIKE '%'+lower(@proc)+'%'
+                       OR EXISTS (SELECT 1 FROM t_act_database_detail dd (NOLOCK) WHERE dd.id=d.action_id AND lower(CAST(dd.statement AS NVARCHAR(MAX))) LIKE '%'+lower(@proc)+'%'))"
+    }
+    if ($types -contains '6') {
+        $parts += "$S, '6' AS match_type, c.name AS action_name
+                   $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=6 AND d.commented_out=0
+                       JOIN t_act_dialog c (NOLOCK) ON c.id=d.action_id
+                   $W AND (lower(c.name) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%')"
+    }
+    if ($types -contains '7') {
+        $parts += "$S, '7' AS match_type, d.label AS action_name
+                   $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=7 AND d.commented_out=0
+                   $W AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'"
+    }
+    if ($types -contains '9') {
+        $parts += "$S, '9' AS match_type, c.name AS action_name
+                   $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=9 AND d.commented_out=0
+                       JOIN t_act_list c (NOLOCK) ON c.id=d.action_id
+                   $W AND (lower(c.name) LIKE '%'+lower(@proc)+'%' OR lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%')"
+    }
+    if ($types -contains '11') {
+        $parts += "$S, '11' AS match_type, d.label AS action_name
+                   $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=11 AND d.commented_out=0
+                   $W AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'"
+    }
+    if ($types -contains '13') {
+        $parts += "$S, '13' AS match_type, d.label AS action_name
+                   $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=13 AND d.commented_out=0
+                   $W AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'"
+    }
+    if ($types -contains '14') {
+        $parts += "$S, '14' AS match_type, d.label AS action_name
+                   $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=14 AND d.commented_out=0
+                   $W AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'"
+    }
+    if ($types -contains '-1') {
+        $parts += "$S, '-1' AS match_type, d.label AS action_name
+                   $J JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.commented_out=1
+                   $W AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'"
+    }
+    if ($parts.Count -eq 0) { $parts += "$S, '1' AS match_type, m.name AS action_name $J WHERE 1=0" }
+    return ($parts -join ' UNION ') + ' ORDER BY action_name'
+}
+
+function Invoke-Search($resp, $qs) {
+    $proc  = if ($qs['process'])     { $qs['process'] }     else { '' }
+    $app   = if ($qs['application']) { $qs['application'] } else { 'WA' }
+    $scope = if ($qs['scope'])       { $qs['scope'] }       else { '1' }
+    $types = $scope -split ','
+    Send-Json $resp (Invoke-Sql (Build-SearchSql $proc $app $types) @{ '@proc'=$proc; '@app'=$app })
+}
+
+function Invoke-ProcessDetail($resp, $id, $qs) {
+    $app = if ($qs['application']) { $qs['application'] } else { 'WA' }
+    Send-Json $resp (Invoke-Sql "$DETAIL_COLS $DETAIL_JOINS WHERE a.name = @app AND m.id = @id ORDER BY d.sequence" @{ '@id'=$id; '@app'=$app })
+}
+
+function Invoke-Callers($resp, $qs) {
+    $child = if ($qs['childProcess']) { $qs['childProcess'] } else { '' }
+    $app   = if ($qs['application'])  { $qs['application'] }  else { 'WA' }
+    $sql   = "$DETAIL_COLS $DETAIL_JOINS
+              WHERE a.name = @app
+              AND m.id IN (
+                  SELECT DISTINCT d2.id FROM t_app_process_object_detail d2 (NOLOCK)
+                  JOIN t_app_process_object ch (NOLOCK)
+                      ON d2.action_id = ch.id AND d2.action_type = 1
+                      AND ch.name COLLATE SQL_Latin1_General_CP1_CS_AS = @child)
+              ORDER BY m.name, d.sequence"
+    Send-Json $resp (Invoke-Sql $sql @{ '@child'=$child; '@app'=$app })
+}
+
+function Invoke-CallerObjects($resp, $qs) {
+    $child = if ($qs['childProcess']) { $qs['childProcess'] } else { '' }
+    $app   = if ($qs['application'])  { $qs['application'] }  else { 'WA' }
+    $sql   = "SELECT DISTINCT CAST(m.id AS NVARCHAR(36)) AS id, m.name, m.description, m.version
+              FROM t_app_process_object m (NOLOCK)
+              JOIN t_application_development a (NOLOCK) ON m.application_id = a.application_id
+              JOIN t_app_process_object_detail d (NOLOCK) ON d.id = m.id AND d.action_type = 1
+              JOIN t_app_process_object ch (NOLOCK) ON d.action_id = ch.id
+              WHERE a.name = @app AND ch.name COLLATE SQL_Latin1_General_CP1_CS_AS = @child
+              ORDER BY m.name"
+    Send-Json $resp (Invoke-Sql $sql @{ '@child'=$child; '@app'=$app })
+}
+
+function Invoke-CompareAction($resp, $id) {
+    $sql = "SELECT c.name, c.description,
+                CASE c.operator_id
+                    WHEN 0 THEN '='   WHEN 1 THEN '<>'
+                    WHEN 2 THEN '>'   WHEN 3 THEN '>='
+                    WHEN 4 THEN '<'   WHEN 5 THEN '<='
+                    ELSE 'Op(' + CAST(c.operator_id AS VARCHAR) + ')'
+                END AS operator_symbol,
+                c.operand1_type,
+                CASE c.operand1_type
+                    WHEN 17 THEN COALESCE(f1.name, c.operand1_id)
+                    WHEN 18 THEN COALESCE(c1.data_string, CAST(c1.data_number AS NVARCHAR(50)), CAST(c1.data_datetime AS NVARCHAR(50)))
+                    WHEN 19 THEN COALESCE(r1.name, c.operand1_id)
+                    WHEN -1 THEN 'Current Row'
+                    ELSE NULL
+                END AS operand1_name,
+                c.operand2_type,
+                CASE c.operand2_type
+                    WHEN 17 THEN COALESCE(f2.name, c.operand2_id)
+                    WHEN 18 THEN COALESCE(c2.data_string, CAST(c2.data_number AS NVARCHAR(50)), CAST(c2.data_datetime AS NVARCHAR(50)))
+                    WHEN 19 THEN COALESCE(r2.name, c.operand2_id)
+                    WHEN -1 THEN 'Current Row'
+                    ELSE NULL
+                END AS operand2_name
+            FROM t_act_compare c (NOLOCK)
+            LEFT JOIN t_app_field    f1 (NOLOCK) ON c.operand1_type = 17 AND c.operand1_id = f1.id
+            LEFT JOIN t_app_record   r1 (NOLOCK) ON c.operand1_type = 19 AND c.operand1_id = r1.id
+            LEFT JOIN t_app_constant c1 (NOLOCK) ON c.operand1_type = 18 AND c.operand1_id = c1.id
+            LEFT JOIN t_app_field    f2 (NOLOCK) ON c.operand2_type = 17 AND c.operand2_id = f2.id
+            LEFT JOIN t_app_record   r2 (NOLOCK) ON c.operand2_type = 19 AND c.operand2_id = r2.id
+            LEFT JOIN t_app_constant c2 (NOLOCK) ON c.operand2_type = 18 AND c.operand2_id = c2.id
+            WHERE c.id = @id"
+    Send-Json $resp (Invoke-Sql $sql @{ '@id'=$id })
+}
+
+function Invoke-CalcAction($resp, $id) {
+    $sql = "SELECT c.name, c.description, cd.sequence,
+                CASE cd.operator_id
+                    WHEN  0 THEN '+'     WHEN  1 THEN '-'      WHEN  2 THEN '*'
+                    WHEN  3 THEN '/'     WHEN  4 THEN '%'      WHEN  5 THEN '&'
+                    WHEN  6 THEN 'Mid'   WHEN  7 THEN 'Search' WHEN  8 THEN 'Len'
+                    WHEN  9 THEN ':='    WHEN 13 THEN 'Date+'   WHEN 19 THEN 'Date-'
+                    ELSE 'Op(' + CAST(cd.operator_id AS VARCHAR) + ')'
+                END AS operator_symbol,
+                cd.result_type,   COALESCE(rf.name, rr.name) AS result_name,
+                cd.operand1_type,
+                CASE cd.operand1_type
+                    WHEN 18 THEN COALESCE(c1.data_string, CAST(c1.data_number AS NVARCHAR(50)), CAST(c1.data_datetime AS NVARCHAR(50)))
+                    WHEN -1 THEN 'Current Row'
+                    ELSE COALESCE(f1.name, r1.name)
+                END AS operand1_name,
+                cd.operand2_type,
+                CASE cd.operand2_type
+                    WHEN 18 THEN COALESCE(c2.data_string, CAST(c2.data_number AS NVARCHAR(50)), CAST(c2.data_datetime AS NVARCHAR(50)))
+                    WHEN -1 THEN 'Current Row'
+                    ELSE COALESCE(f2.name, r2.name)
+                END AS operand2_name,
+                cd.operand3_type,
+                CASE cd.operand3_type
+                    WHEN 18 THEN COALESCE(c3.data_string, CAST(c3.data_number AS NVARCHAR(50)), CAST(c3.data_datetime AS NVARCHAR(50)))
+                    WHEN -1 THEN 'Current Row'
+                    ELSE COALESCE(f3.name, r3.name)
+                END AS operand3_name
+            FROM t_act_calculate c (NOLOCK)
+            JOIN t_act_calculate_detail cd (NOLOCK) ON c.id = cd.id
+            LEFT JOIN t_app_field    rf (NOLOCK) ON cd.result_type   = 17 AND cd.result_id   = rf.id
+            LEFT JOIN t_app_record   rr (NOLOCK) ON cd.result_type   = 19 AND cd.result_id   = rr.id
+            LEFT JOIN t_app_field    f1 (NOLOCK) ON cd.operand1_type = 17 AND cd.operand1_id = f1.id
+            LEFT JOIN t_app_record   r1 (NOLOCK) ON cd.operand1_type = 19 AND cd.operand1_id = r1.id
+            LEFT JOIN t_app_constant c1 (NOLOCK) ON cd.operand1_type = 18 AND cd.operand1_id = c1.id
+            LEFT JOIN t_app_field    f2 (NOLOCK) ON cd.operand2_type = 17 AND cd.operand2_id = f2.id
+            LEFT JOIN t_app_record   r2 (NOLOCK) ON cd.operand2_type = 19 AND cd.operand2_id = r2.id
+            LEFT JOIN t_app_constant c2 (NOLOCK) ON cd.operand2_type = 18 AND cd.operand2_id = c2.id
+            LEFT JOIN t_app_field    f3 (NOLOCK) ON cd.operand3_type = 17 AND cd.operand3_id = f3.id
+            LEFT JOIN t_app_record   r3 (NOLOCK) ON cd.operand3_type = 19 AND cd.operand3_id = r3.id
+            LEFT JOIN t_app_constant c3 (NOLOCK) ON cd.operand3_type = 18 AND cd.operand3_id = c3.id
+            WHERE c.id = @id ORDER BY cd.sequence"
+    Send-Json $resp (Invoke-Sql $sql @{ '@id'=$id })
+}
+
+
+
+function Invoke-ListAction($resp, $id) {
+    $sql = "SELECT
+                l.name, l.description, l.find_exact,
+                CASE l.operator_id
+                    WHEN  0 THEN 'Get Max'       WHEN  1 THEN 'Get Row Number'
+                    WHEN  2 THEN 'Add Row'       WHEN  3 THEN 'Add Record'
+                    WHEN  4 THEN 'Insert Record' WHEN  6 THEN 'Replace Fields'
+                    WHEN  8 THEN 'Delete Record' WHEN  9 THEN 'Find'
+                    WHEN 11 THEN 'Get First Row' WHEN 12 THEN 'Get Last Row'
+                    WHEN 13 THEN 'Get Next Row'  WHEN 14 THEN 'Get Previous Row'
+                    WHEN 15 THEN 'Get Row'       WHEN 16 THEN 'Clear'
+                    ELSE 'Unknown (' + CAST(l.operator_id AS VARCHAR) + ')'
+                END AS operator_name,
+                COALESCE(rl.name, l.list_id) AS list_name,
+                l.operand1_type,
+                CASE l.operand1_type
+                    WHEN  17 THEN COALESCE(f1.name, l.operand1_id)
+                    WHEN  19 THEN COALESCE(r1.name, l.operand1_id)
+                    WHEN  -1 THEN 'Current Row'
+                    ELSE NULL
+                END AS operand1_name,
+                l.operand2_type,
+                CASE l.operand2_type
+                    WHEN  17 THEN COALESCE(f2.name, l.operand2_id)
+                    WHEN  19 THEN COALESCE(r2.name, l.operand2_id)
+                    WHEN  -1 THEN 'Current Row'
+                    ELSE NULL
+                END AS operand2_name
+            FROM t_act_list l (NOLOCK)
+            LEFT JOIN t_app_record rl (NOLOCK) ON l.list_id       = rl.id
+            LEFT JOIN t_app_field  f1 (NOLOCK) ON l.operand1_type = 17 AND l.operand1_id = f1.id
+            LEFT JOIN t_app_record r1 (NOLOCK) ON l.operand1_type = 19 AND l.operand1_id = r1.id
+            LEFT JOIN t_app_field  f2 (NOLOCK) ON l.operand2_type = 17 AND l.operand2_id = f2.id
+            LEFT JOIN t_app_record r2 (NOLOCK) ON l.operand2_type = 19 AND l.operand2_id = r2.id
+            WHERE l.id = @id"
+    Send-Json $resp (Invoke-Sql $sql @{ '@id'=$id })
+}
+
+function Invoke-DialogAction($resp, $id) {
+    $sql = "SELECT
+                d.name, d.description, dd.sequence,
+                COALESCE(ff.name, fr.name, dd.field_id) AS field_name,
+                CASE dd.field_type WHEN 17 THEN 'Field' WHEN 19 THEN 'Record' ELSE '' END AS field_type_name,
+                COALESCE(pf.name, pc.value, pr.name,
+                    CASE WHEN dd.prompt_type IN (-1,0) THEN '' ELSE dd.prompt_id END) AS prompt_name,
+                CASE dd.prompt_type WHEN 17 THEN 'Field' WHEN 18 THEN 'Const' WHEN 21 THEN 'Resource' ELSE '' END AS prompt_type_name,
+                COALESCE(pv.name, CASE WHEN dd.validation_type IN (-1,0) THEN '' ELSE dd.validation_id END) AS validation_name,
+                CASE dd.validation_type WHEN 1 THEN 'Process' ELSE '' END AS validation_type_name,
+                dd.required, dd.clear_initially
+            FROM t_act_dialog d (NOLOCK)
+            JOIN t_act_dialog_detail dd (NOLOCK) ON d.id = dd.id
+            LEFT JOIN t_app_field    ff (NOLOCK) ON dd.field_type      = 17 AND dd.field_id      = ff.id
+            LEFT JOIN t_app_record   fr (NOLOCK) ON dd.field_type      = 19 AND dd.field_id      = fr.id
+            LEFT JOIN t_app_field    pf (NOLOCK) ON dd.prompt_type     = 17 AND dd.prompt_id     = pf.id
+            LEFT JOIN t_app_constant pc (NOLOCK) ON dd.prompt_type     = 18 AND dd.prompt_id     = pc.id
+            LEFT JOIN t_resource     pr (NOLOCK) ON dd.prompt_type     = 21 AND dd.prompt_id     = pr.id
+            LEFT JOIN t_app_process_object pv (NOLOCK) ON dd.validation_type = 1 AND dd.validation_id = pv.id
+            WHERE d.id = @id
+            ORDER BY dd.sequence"
+    Send-Json $resp (Invoke-Sql $sql @{ '@id'=$id })
+}
+
+function Invoke-DbAction($resp, $id) {
+    $sql = "SELECT dm.name, dm.description, dd.sequence, dd.provider_type,
+                   CAST(dd.statement AS NVARCHAR(MAX)) AS statement
+            FROM t_act_database dm (NOLOCK)
+            JOIN t_act_database_detail dd (NOLOCK) ON dd.id = dm.id
+            JOIN t_application_development a (NOLOCK) ON dm.application_id = a.application_id
+            WHERE dm.id = @id
+            ORDER BY dd.sequence"
+    $rows = Resolve-Guids (Invoke-SqlRaw $sql @{ '@id'=$id })
+    Send-Json $resp (ConvertTo-Json -InputObject @($rows) -Depth 3)
+}
+
+# ─── HTTP Listener ────────────────────────────────────────────────────────────
+
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://localhost:$Port/")
 $listener.Start()
@@ -144,27 +437,25 @@ while ($listener.IsListening) {
         $reqServer = $qs['server']
         $script:CurrentServer = if ($reqServer -and $AllowedServers -contains $reqServer) { $reqServer } else { 'ArcadiaWHJSqlStage' }
 
-        if ($path -eq '/' -or $path -eq '/index.html') {
-            $html = [System.IO.File]::ReadAllBytes($IndexHtml)
-            $resp.ContentType = 'text/html'
-            $resp.OutputStream.Write($html, 0, $html.Length)
+        switch -Regex ($path) {
+            '^/$|^/index\.html$'         { Invoke-StaticHtml $resp; break }
+            '^/api/search$'              { Invoke-Search $resp $qs; break }
+            '^/api/process/(.+)$'        { Invoke-ProcessDetail $resp ([System.Uri]::UnescapeDataString($Matches[1])) $qs; break }
+            '^/api/callers$'             { Invoke-Callers $resp $qs; break }
+            '^/api/caller-objects$'      { Invoke-CallerObjects $resp $qs; break }
+            '^/api/compare-action/(.+)$' { Invoke-CompareAction $resp ([System.Uri]::UnescapeDataString($Matches[1])); break }
+            '^/api/calc-action/(.+)$'    { Invoke-CalcAction    $resp ([System.Uri]::UnescapeDataString($Matches[1])); break }
+            '^/api/list-action/(.+)$'    { Invoke-ListAction    $resp ([System.Uri]::UnescapeDataString($Matches[1])); break }
+            '^/api/dialog-action/(.+)$'  { Invoke-DialogAction  $resp ([System.Uri]::UnescapeDataString($Matches[1])); break }
+            '^/api/db-action/(.+)$'      { Invoke-DbAction      $resp ([System.Uri]::UnescapeDataString($Matches[1])); break }
+            default                      { $resp.StatusCode = 404 }
+        }
 
-        } elseif ($path -eq '/api/search') {
-            # scope = comma-separated action_type numbers (1=Process,3=Calc,4=Compare,5=DB,6=Dialog,7=Execute,9=List,11=Receive,13=Send,14=User,-1=Comment)
-            $proc  = if ($qs['process'])     { $qs['process'] }     else { '' }
-            $app   = if ($qs['application']) { $qs['application'] } else { 'WA' }
-            $scope = if ($qs['scope'])       { $qs['scope'] }       else { '1' }
-            $types = $scope -split ','
-            # S = base SELECT columns (action_name added per-part since source differs by type)
-            $S = "SELECT DISTINCT CAST(m.id AS NVARCHAR(36)) AS id, m.name, m.description, m.version"
-            $J = "FROM t_app_process_object m (NOLOCK) JOIN t_application_development a (NOLOCK) ON m.application_id = a.application_id"
-            $W = "WHERE a.name = @app"
-            $parts = @()
+        if ($false) { # DEAD_CODE_OUTER_WRAPPER
+        if ($false) { # inner -- search handler dead code
 
             # Type 1 â€” Process: action_name = process name
-            if ($types -contains '1') {
-                $parts += "$S, '1' AS match_type, m.name AS action_name $J $W AND lower(m.name) LIKE '%'+lower(@proc)+'%'"
-            }
+
 
             # Type 3 â€” Calculate: JOIN action table to get name; also search expression variables
             if ($types -contains '3') {
@@ -473,9 +764,8 @@ while ($listener.IsListening) {
             $rows = Resolve-Guids (Invoke-SqlRaw $sql @{ '@id'=$id })
             Send-Json $resp (ConvertTo-Json -InputObject @($rows) -Depth 3)
 
-        } else {
-            $resp.StatusCode = 404
-        }
+        } # end inner dead-code block
+        } # end DEAD_CODE_OUTER_WRAPPER
     } catch {
         $msg   = $_.Exception.Message -replace '"','\"'
         $bytes = [System.Text.Encoding]::UTF8.GetBytes("{`"error`":`"$msg`"}")
