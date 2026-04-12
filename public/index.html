@@ -528,8 +528,9 @@ function renderTable() {
       tbody.appendChild(th);
     }
     const tr = document.createElement('tr');
-    const typeKey = String(r.action_type);
-    tr.className = 'detail-row ' + (r.action_type === -1 ? 'commented ' : '') + `at-${typeKey === '-1' ? 'neg1' : typeKey}`;
+    const isCommented = r.commented_out == 1;
+    const typeKey = isCommented ? '-1' : String(r.action_type);
+    tr.className = 'detail-row ' + (isCommented || r.action_type === -1 ? 'commented ' : '') + `at-${typeKey === '-1' ? 'neg1' : typeKey}`;
     tr.dataset.group = groupKey;
     tr.dataset.seq   = r.sequence;
     // Auto-expand: show rows immediately when only one group
@@ -549,7 +550,7 @@ function renderTable() {
     if (isDialog)   tr.classList.add('dialog-clickable');
     tr.innerHTML = `
       <td class="seq">${r.sequence}</td>
-      <td class="label-col">${esc(r.label)}</td>
+      <td class="label-col">${isCommented ? '--' : esc(r.label)}</td>
       <td>${esc(r.action_type_name)}</td>
       <td class="action-name" title="${esc(r.action_name)}">${esc(r.action_name)}</td>
       <td class="pass">${makePassFail(r.pass_label, r)}</td>
