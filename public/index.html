@@ -133,6 +133,10 @@
   tr.calc-clickable    td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
   tr.compare-clickable td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
   tr.dialog-clickable  td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
+  tr.generic-clickable td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
+  .copy-paths-btn { background: none; border: none; cursor: pointer; font-size: 0.8rem; margin-left: 6px;
+                    opacity: 0.7; padding: 1px 5px; border-radius: 3px; vertical-align: middle; }
+  .copy-paths-btn:hover { opacity: 1; background: rgba(255,255,255,0.3); }
   .db-statement { background: #f8fafc; color: #000000; font-family: 'Courier New', monospace;
                   font-size: 0.78rem; padding: 12px; border-radius: 6px; white-space: pre-wrap;
                   word-break: break-all; margin-top: 8px; max-height: 400px; overflow-y: auto;
@@ -627,7 +631,7 @@ function renderTable() {
       const escId   = r.process_id;
       const escName = r.process_name.replace(/'/g, "\\'");
       const toggleIcon = autoExpand ? '' : `<span class="toggle-icon">▶</span>`;
-      th.innerHTML = `<td colspan="6">${toggleIcon}⚙️ <span class="proc-name-link" onclick="event.stopPropagation();drillInto('${escId}','${escName}')">${esc(r.process_name)}</span><span class="proc-badge">${groupCount} steps</span><span class="callers-link" onclick="event.stopPropagation();showCallers('${escId}','${escName}')">👥 Who calls this?</span></td>`;
+      th.innerHTML = `<td colspan="6">${toggleIcon}⚙️ <span class="proc-name-link" onclick="event.stopPropagation();drillInto('${escId}','${escName}')">${esc(r.process_name)}</span><span class="proc-badge">${groupCount} steps</span><span class="callers-link" onclick="event.stopPropagation();showCallers('${escId}','${escName}')">👥 Who calls this?</span><button class="copy-paths-btn" title="Copy all call paths to clipboard" onclick="event.stopPropagation();copyCallerPaths('${escId}','${escName}',this)">📋</button></td>`;
       if (!autoExpand) th.onclick = () => toggleGroup(thisKey, th);
       tbody.appendChild(th);
     }
@@ -640,18 +644,20 @@ function renderTable() {
     // Auto-expand: show rows immediately when only one group
     if (autoExpand) tr.style.display = 'table-row';
     tr.style.background = ACTION_COLORS[typeKey] || '#f4f6fb';
-    const isProcess  = r.action_type === 1 && r.action_id;
-    const isDatabase = r.action_type === 5 && r.action_id;
-    const isList     = r.action_type === 9 && r.action_id;
-    const isCalc     = r.action_type === 3 && r.action_id;
-    const isCompare  = r.action_type === 4 && r.action_id;
-    const isDialog   = r.action_type === 6 && r.action_id;
+    const isProcess  = r.action_type === 1  && r.action_id;
+    const isDatabase = r.action_type === 5  && r.action_id;
+    const isList     = r.action_type === 9  && r.action_id;
+    const isCalc     = r.action_type === 3  && r.action_id;
+    const isCompare  = r.action_type === 4  && r.action_id;
+    const isDialog   = r.action_type === 6  && r.action_id;
+    const isGeneric  = [7,10,11,12,13,14,16,17,18,19].includes(r.action_type) && r.action_id;
     if (isProcess)  tr.classList.add('drillable');
     if (isDatabase) tr.classList.add('db-clickable');
     if (isList)     tr.classList.add('list-clickable');
     if (isCalc)     tr.classList.add('calc-clickable');
     if (isCompare)  tr.classList.add('compare-clickable');
     if (isDialog)   tr.classList.add('dialog-clickable');
+    if (isGeneric)  tr.classList.add('generic-clickable');
     tr.innerHTML = `
       <td class="seq">${r.sequence}</td>
       <td class="label-col">${isCommented ? '--' : esc(r.label)}</td>
@@ -660,12 +666,14 @@ function renderTable() {
       <td class="pass">${makePassFail(r.pass_label, r)}</td>
       <td class="fail">${makePassFail(r.fail_label, r)}</td>`;
     tr.onclick = (e) => {
-      if (isProcess  && e.target.classList.contains('action-name')) drillInto(r.action_id, r.action_name, r.label);
-      else if (isDatabase && e.target.classList.contains('action-name')) showDbDetail(r, tr);
-      else if (isList && e.target.classList.contains('action-name')) showListDetail(r, tr);
-      else if (isCalc    && e.target.classList.contains('action-name')) showCalcDetail(r, tr);
-      else if (isCompare && e.target.classList.contains('action-name')) showCompareDetail(r, tr);
-      else if (isDialog  && e.target.classList.contains('action-name')) showDialogDetail(r, tr);
+      if (!e.target.classList.contains('action-name')) { showDetail(r, tr); return; }
+      if (isProcess)  drillInto(r.action_id, r.action_name, r.label);
+      else if (isDatabase) showDbDetail(r, tr);
+      else if (isList)     showListDetail(r, tr);
+      else if (isCalc)     showCalcDetail(r, tr);
+      else if (isCompare)  showCompareDetail(r, tr);
+      else if (isDialog)   showDialogDetail(r, tr);
+      else if (isGeneric)  showGenericDetail(r, tr);
       else showDetail(r, tr);
     };
     tr.addEventListener('contextmenu', e => {
@@ -764,7 +772,23 @@ function renderPathsView(targetName, paths) {
     </table>`;
 }
 
-
+async function copyCallerPaths(processId, processName, btn) {
+  const app    = document.getElementById('inp-app').value.trim();
+  const orig   = btn.textContent;
+  btn.textContent = '⏳';
+  try {
+    const res   = await fetch(`/api/explorer/all-paths?id=${encodeURIComponent(processId)}&app=${encodeURIComponent(app)}&server=${encodeURIComponent(getServer())}`);
+    const paths = await res.json();
+    if (paths.error) throw new Error(paths.error);
+    if (!paths.length) { btn.textContent = '∅'; setTimeout(() => btn.textContent = orig, 1500); return; }
+    const text = paths.map(p => p.path).join('\n');
+    await navigator.clipboard.writeText(text);
+    btn.textContent = '✓';
+  } catch(e) {
+    btn.textContent = '✗';
+  }
+  setTimeout(() => btn.textContent = orig, 1800);
+}
 
 // Build a character-grid terminal mockup from screen format rows for one screen_group
 function renderScreenGrid(groupRows) {
@@ -1101,6 +1125,42 @@ async function showListDetail(r, tr) {
       (op1 ? `<div class="detail-row"><span class="detail-label">Operand 1</span><span class="detail-val">${op1}</span></div>` : '') +
       (op2 ? `<div class="detail-row"><span class="detail-label">Operand 2</span><span class="detail-val">${op2}</span></div>` : '') +
       (d.operator_name === 'Find' ? row('Find Exact', d.find_exact ? 'Yes' : 'No') : '');
+  } catch(e) {
+    document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
+  }
+}
+
+async function showGenericDetail(r, tr) {
+  document.querySelectorAll('tbody tr.selected').forEach(el => el.classList.remove('selected'));
+  tr.classList.add('selected');
+  const emojis = {7:'⚡',10:'📤',11:'📥',12:'📊',13:'📨',14:'👤',16:'🌐',17:'🔧',18:'🔒',19:'📋'};
+  const emoji  = emojis[r.action_type] || '•';
+  document.getElementById('detail-title').textContent = `${emoji} ${r.action_type_name}: ${r.action_name || ''}`;
+  document.getElementById('detail-content').innerHTML = '<p style="color:#8892a4;font-size:0.83rem">Loading…</p>';
+  document.getElementById('detail-panel').style.display = 'block';
+  try {
+    const res  = await fetch(`/api/generic-action/${r.action_type}/${encodeURIComponent(r.action_id)}?server=${encodeURIComponent(getServer())}`);
+    const rows = await res.json();
+    const esc2 = s => (s == null ? '' : String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const row  = (label, val) => val != null && val !== ''
+      ? `<div class="detail-row"><span class="detail-label">${esc2(label)}</span><span class="detail-val">${esc2(val)}</span></div>`
+      : '';
+    if (!rows.length) {
+      document.getElementById('detail-content').innerHTML =
+        row('Action Name', r.action_name) + row('Action ID', r.action_id) +
+        '<p style="color:#8892a4;font-size:0.83rem;margin-top:8px">No additional detail found.</p>';
+      return;
+    }
+    const d    = rows[0];
+    const skip = new Set(['name','description']);
+    const extra = Object.entries(d)
+      .filter(([k,v]) => !skip.has(k) && v != null && v !== '')
+      .map(([k,v]) => row(k.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase()), v))
+      .join('');
+    document.getElementById('detail-content').innerHTML =
+      row('Name',        d.name || r.action_name) +
+      row('Description', d.description) +
+      extra;
   } catch(e) {
     document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
   }

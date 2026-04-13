@@ -376,6 +376,32 @@ app.get('/api/db-action/:id', async (req, res) => {
   } catch(e) { sendErr(res, e); }
 });
 
+// ── Generic action detail — covers types not yet handled by specific endpoints ─
+const ACTION_TYPE_TABLES = {
+  7:  { table: 't_act_execute',  cols: `name, description` },
+  10: { table: 't_act_publish',  cols: `name, description` },
+  11: { table: 't_act_receive',  cols: `name, description` },
+  12: { table: 't_act_report',   cols: `name, description` },
+  13: { table: 't_act_send',     cols: `name, description` },
+  14: { table: 't_act_user',     cols: `name, description` },
+  16: { table: 't_app_locale',   cols: `name, description` },
+  17: { table: 't_app_field',    cols: `name, description` },
+  18: { table: 't_app_constant', cols: `data_string AS name, CAST(data_number AS NVARCHAR(50)) AS data_number, CAST(data_datetime AS NVARCHAR(50)) AS data_datetime, '' AS description` },
+  19: { table: 't_app_record',   cols: `name, description` },
+};
+
+app.get('/api/generic-action/:type/:id', async (req, res) => {
+  const typeNum = parseInt(req.params.type, 10);
+  const info    = ACTION_TYPE_TABLES[typeNum];
+  if (!info) return send(res, []);
+  try {
+    const rows = await runQuery(getServer(req),
+      `SELECT TOP 1 ${info.cols} FROM ${info.table} (NOLOCK) WHERE id = @id`,
+      { id: req.params.id });
+    send(res, rows);
+  } catch(e) { sendErr(res, e); }
+});
+
 // ── EAR Tester API ────────────────────────────────────────────────────────────
 let testRunning = false;
 
