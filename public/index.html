@@ -423,6 +423,7 @@ async function openProcess(processId, processName, pushToStack) {
 function renderProcessList() {
   document.getElementById('proc-list-view').style.display = 'block';
   document.getElementById('grid-view').style.display      = 'none';
+  const pv = document.getElementById('paths-view'); if (pv) pv.style.display = 'none';
   const container = document.getElementById('proc-list-view');
   if (!searchList.length) {
     container.innerHTML = '<p style="color:#8892a4;padding:12px">No matching processes found.</p>';
@@ -605,6 +606,7 @@ function renderTable() {
 
   document.getElementById('proc-list-view').style.display = 'none';
   document.getElementById('grid-view').style.display      = 'block';
+  const pv = document.getElementById('paths-view'); if (pv) pv.style.display = 'none';
   const tbody = document.getElementById('tbody');
   tbody.innerHTML = '';
   // Count distinct processes to decide auto-expand
@@ -625,7 +627,7 @@ function renderTable() {
       const escId   = r.process_id;
       const escName = r.process_name.replace(/'/g, "\\'");
       const toggleIcon = autoExpand ? '' : `<span class="toggle-icon">▶</span>`;
-      th.innerHTML = `<td colspan="6">${toggleIcon}⚙️ <span class="proc-name-link" onclick="event.stopPropagation();drillInto('${escId}','${escName}')">${esc(r.process_name)}</span><span class="proc-badge">${groupCount} steps</span><span class="callers-link" onclick="event.stopPropagation();showCallers('${escName}')">👥 Who calls this?</span></td>`;
+      th.innerHTML = `<td colspan="6">${toggleIcon}⚙️ <span class="proc-name-link" onclick="event.stopPropagation();drillInto('${escId}','${escName}')">${esc(r.process_name)}</span><span class="proc-badge">${groupCount} steps</span><span class="callers-link" onclick="event.stopPropagation();showCallers('${escId}','${escName}')">👥 Who calls this?</span></td>`;
       if (!autoExpand) th.onclick = () => toggleGroup(thisKey, th);
       tbody.appendChild(th);
     }
@@ -701,11 +703,10 @@ function drillInto(processId, processName, stepLabel) {
   openProcess(processId, processName, false);
 }
 
-async function showCallers(processName) {
+async function showCallers(processId, processName) {
   const app = document.getElementById('inp-app').value.trim();
-  // Save current state so Back returns here
-  navStack.push({ mode: viewMode === 'list'
-    ? 'list' : 'detail',
+  navStack.push({
+    mode:         viewMode === 'list' ? 'list' : 'detail',
     allRows:      allRows.slice(),
     searchList:   searchList.slice(),
     processInput: document.getElementById('inp-process').value,
@@ -714,16 +715,53 @@ async function showCallers(processName) {
   updateBackButton();
   closeDetail();
   try {
-    const res = await fetch(`/api/caller-objects?childProcess=${encodeURIComponent(processName)}&application=${encodeURIComponent(app)}&server=${encodeURIComponent(getServer())}`);
-    const callers = await res.json();
-    if (callers.error) throw new Error(callers.error);
-    if (!callers.length) { alert(`No processes call "${processName}".`); goBack(); return; }
-    searchList = callers;
-    viewMode   = 'list';
-    renderProcessList();
+    const res   = await fetch(`/api/explorer/all-paths?id=${encodeURIComponent(processId)}&app=${encodeURIComponent(app)}&server=${encodeURIComponent(getServer())}`);
+    const paths = await res.json();
+    if (paths.error) throw new Error(paths.error);
+    if (!paths.length) { alert(`No callers found for "${processName}".`); goBack(); return; }
+    renderPathsView(processName, paths);
   } catch(e) {
-    alert('Error loading callers: ' + e.message);
+    alert('Error loading paths: ' + e.message);
   }
+}
+
+function renderPathsView(targetName, paths) {
+  viewMode = 'paths';
+  document.getElementById('proc-list-view').style.display = 'none';
+  document.getElementById('grid-view').style.display      = 'none';
+
+  let pv = document.getElementById('paths-view');
+  if (!pv) {
+    pv = document.createElement('div');
+    pv.id = 'paths-view';
+    pv.style.cssText = 'padding:12px;overflow:auto';
+    document.querySelector('.main-content') && document.querySelector('.main-content').appendChild(pv)
+      || document.getElementById('grid-view').parentNode.appendChild(pv);
+  }
+  pv.style.display = 'block';
+
+  const roots  = paths.filter(p => p.isRoot).length;
+  const total  = paths.length;
+  pv.innerHTML = `
+    <div style="margin-bottom:10px;font-weight:600;font-size:1rem">
+      All paths to <span style="color:#7c3aed">${esc(targetName)}</span>
+      <span style="font-size:0.8rem;font-weight:400;color:#666;margin-left:8px">${total} callers · ${roots} entry points</span>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:0.82rem">
+      <thead><tr style="background:#f3f4f6;text-align:left">
+        <th style="padding:6px 10px;border-bottom:2px solid #e5e7eb;width:22%">Caller</th>
+        <th style="padding:6px 10px;border-bottom:2px solid #e5e7eb">Full Path → ${esc(targetName)}</th>
+      </tr></thead>
+      <tbody>
+        ${paths.map(p => `
+          <tr style="border-bottom:1px solid #f0f0f0" class="${p.isRoot ? 'root-path-row' : ''}">
+            <td style="padding:5px 10px;font-weight:${p.isRoot ? '600' : '400'};color:${p.isRoot ? '#059669' : '#374151'}">
+              ${esc(p.name)}${p.isRoot ? ' <span style="font-size:0.7rem;background:#d1fae5;color:#065f46;border-radius:3px;padding:1px 5px">entry</span>' : ''}
+            </td>
+            <td style="padding:5px 10px;color:#6b7280;font-family:monospace;font-size:0.78rem">${esc(p.path)}</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
 }
 
 

@@ -223,6 +223,56 @@ app.get('/api/caller-objects', async (req, res) => {
   } catch(e) { sendErr(res, e); }
 });
 
+// ── Explorer: all paths TO a process via reverse BFS on the cached graph ──────
+app.get('/api/explorer/all-paths', async (req, res) => {
+  try {
+    const server = getServer(req);
+    const app    = req.query.app || 'WA';
+    const procId = (req.query.id || '').toUpperCase();
+    if (!procId) return send(res, []);
+
+    const { adjacency, nameOf } = await getGraph(server, app);
+
+    // Build reverse adjacency: child → [parents]
+    const reverseAdj = new Map();
+    for (const [parent, children] of adjacency) {
+      for (const { childId } of children) {
+        if (!reverseAdj.has(childId)) reverseAdj.set(childId, []);
+        reverseAdj.get(childId).push(parent);
+      }
+    }
+
+    // BFS backwards from target — each node stores the full path from itself TO target
+    const pathToTarget = new Map([[procId, nameOf.get(procId) || procId]]);
+    const queue = [procId];
+    while (queue.length) {
+      const curr     = queue.shift();
+      const currPath = pathToTarget.get(curr);
+      for (const parent of (reverseAdj.get(curr) || [])) {
+        if (!pathToTarget.has(parent)) {
+          pathToTarget.set(parent, (nameOf.get(parent) || parent) + ' → ' + currPath);
+          queue.push(parent);
+        }
+      }
+    }
+
+    // Return all ancestors sorted by path depth (shallowest first)
+    const results = [];
+    for (const [nodeId, path] of pathToTarget) {
+      if (nodeId === procId) continue;
+      results.push({
+        id:     nodeId,
+        name:   nameOf.get(nodeId) || nodeId,
+        path,
+        depth:  path.split(' → ').length - 1,
+        isRoot: !reverseAdj.has(nodeId) || reverseAdj.get(nodeId).length === 0
+      });
+    }
+    results.sort((a, b) => a.depth - b.depth || a.name.localeCompare(b.name));
+    send(res, results);
+  } catch(e) { sendErr(res, e); }
+});
+
 app.get('/api/compare-action/:id', async (req, res) => {
   try {
     const rows = await runQuery(getServer(req), `
