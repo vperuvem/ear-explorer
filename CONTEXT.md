@@ -82,13 +82,32 @@ all process step fetches. They LEFT JOIN every action table and COALESCE the `na
   No navigation required.
 
 ### EAR Explorer — Drill Into All Action Types
-- **All 16 action types** now have clickable action-name cells (underline dotted).
+- **All 16 action types** now open a detail panel on click.
+- **Click behaviour (row onclick):**
+  - Process (type 1): click action-name cell only → `drillInto()` navigates into subprocess.
+    Clicking elsewhere on the row shows the basic step metadata panel.
+  - All other types: clicking **anywhere on the row** opens the type-specific detail panel.
+  - Pass/Fail label-link spans are exempt (`e.target.closest('.label-link')`) so navigation still works.
 - Types 1/3/4/5/6/9 have specific handlers (drillInto / showCalcDetail / etc).
 - Types 7/10/11/12/13/14/16/17/18/19 use **`showGenericDetail(r, tr)`**:
   - Calls `GET /api/generic-action/:type/:id`
   - Server looks up `ACTION_TYPE_TABLES[type]` → correct table + columns
   - Renders name, description, and any extra fields in the side panel
   - Emoji per type: ⚡Execute 📤Publish 📥Receive 📊Report 📨Send 👤User 🌐Locale 🔧Field 🔒Constant 📋Record
+
+### EAR Explorer — "📋 Copy Paths" in the Detail Panel (any action type)
+Every detail panel (Calculate, Compare, Database, Dialog, List, Execute, etc.) now has a
+**"📋 Copy Paths to this action"** button appended after the content loads.
+
+- **`injectPathsButton(r)`** — appended via `appendChild` after `innerHTML` is set in every
+  `showXxxDetail` function (showCalcDetail, showCompareDetail, showDbDetail, showDialogDetail,
+  showListDetail, showGenericDetail, showDetail). Skips type=1 (Process already has header button).
+- **`copyActionPaths(type, id, name, app, btn)`** — calls `GET /api/action-paths`:
+  - Step 1: finds all processes that reference this action (`t_app_process_object_detail WHERE action_id=@id AND action_type=@type`)
+  - Step 2: reverse-BFS each process on the cached graph to get all ancestor paths
+  - Returns: `[{ id, name, processName, path, depth, isRoot }]` de-duped, sorted by processName then depth
+  - Clipboard text is grouped by process: `── via PROCESS_NAME ──\n  EntryA → ... → PROC\n  EntryB → ...`
+  - Button shows ⏳ while loading, ✓ Copied N paths on success, ∅ if no paths found
 
 ### EAR Tester — Reachable Dialogs (BFS)
 - Call graph cached per `server|app` key (15 min TTL). First load ~1 s; switches <10 ms.
@@ -107,11 +126,11 @@ all process step fetches. They LEFT JOIN every action table and COALESCE the `na
 ## Git Commit Log (recent)
 | Hash | Summary |
 |---|---|
-| `1236ac4` | feat: drill into all action types; copy-paths clipboard button |
+| `(latest)` | feat: Copy Paths for any action type in detail panel; fix row click; /api/action-paths |
+| `bbdf90a` | docs: update CONTEXT.md with schema map, all features, commit log, standing rule |
+| `1236ac4` | feat: drill into all action types (Execute/Send/Receive/Report/etc); copy-paths clipboard button |
 | `164b581` | feat: Explorer 'Who calls this?' reverse BFS for all paths |
 | `8c21c6a` | feat: launch VirtTerm button; _vtree.ps1; CONTEXT.md session notes |
-| `e047ad2` | feat: reachable dialogs BFS + dynamic menu paths + route fixes + HTML encoding + copy-path |
-| `5b2e49c` | feat: reachable dialogs BFS + two bulk queries, fast <1s response |
 
 ---
 

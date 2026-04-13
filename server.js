@@ -273,6 +273,80 @@ app.get('/api/explorer/all-paths', async (req, res) => {
   } catch(e) { sendErr(res, e); }
 });
 
+// ── Explorer: all paths TO an action object (any type) via reverse BFS ─────────
+// Finds all processes that reference the action, then BFS-ancestors each process.
+app.get('/api/action-paths', async (req, res) => {
+  try {
+    const server     = getServer(req);
+    const app        = req.query.app  || 'WA';
+    const actionId   = (req.query.id  || '').toUpperCase();
+    const actionType = parseInt(req.query.type || '0', 10);
+    if (!actionId || !actionType) return send(res, []);
+
+    // Step 1: which processes contain this action?
+    const procRows = await runQuery(server, `
+      SELECT DISTINCT UPPER(CAST(m.id AS NVARCHAR(36))) AS proc_id, m.name AS proc_name
+      FROM t_app_process_object_detail d (NOLOCK)
+      JOIN t_app_process_object m (NOLOCK) ON m.id = d.id
+      JOIN t_application_development a (NOLOCK) ON m.application_id = a.application_id
+      WHERE a.name = @app
+        AND UPPER(CAST(d.action_id AS NVARCHAR(36))) = @actionId
+        AND d.action_type = CAST(@actionType AS INT)
+        AND d.commented_out = 0`,
+      { app, actionId, actionType: String(actionType) });
+
+    if (!procRows.length) return send(res, []);
+
+    // Step 2: build reverse adjacency from cached graph
+    const { adjacency, nameOf } = await getGraph(server, app);
+    const reverseAdj = new Map();
+    for (const [parent, children] of adjacency) {
+      for (const { childId } of children) {
+        if (!reverseAdj.has(childId)) reverseAdj.set(childId, []);
+        reverseAdj.get(childId).push(parent);
+      }
+    }
+
+    // Step 3: reverse BFS from each containing process, collect all ancestor paths
+    const seen    = new Set(); // avoid duplicate caller+path combos across processes
+    const results = [];
+    for (const proc of procRows) {
+      const procId   = proc.proc_id;
+      const procName = proc.proc_name;
+      // pathTo: nodeId → full path string ending at procName
+      const pathTo = new Map([[procId, procName]]);
+      const queue  = [procId];
+      while (queue.length) {
+        const curr     = queue.shift();
+        const currPath = pathTo.get(curr);
+        for (const parent of (reverseAdj.get(curr) || [])) {
+          if (!pathTo.has(parent)) {
+            pathTo.set(parent, (nameOf.get(parent) || parent) + ' → ' + currPath);
+            queue.push(parent);
+          }
+        }
+      }
+      for (const [nodeId, path] of pathTo) {
+        if (nodeId === procId) continue;
+        const key = nodeId + '|' + path;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        results.push({
+          id:          nodeId,
+          name:        nameOf.get(nodeId) || nodeId,
+          processName: procName,
+          path,
+          depth:       path.split(' → ').length - 1,
+          isRoot:      !reverseAdj.has(nodeId) || reverseAdj.get(nodeId).length === 0
+        });
+      }
+    }
+    results.sort((a, b) =>
+      a.processName.localeCompare(b.processName) || a.depth - b.depth);
+    send(res, results);
+  } catch(e) { sendErr(res, e); }
+});
+
 app.get('/api/compare-action/:id', async (req, res) => {
   try {
     const rows = await runQuery(getServer(req), `
