@@ -785,7 +785,9 @@ async function copyCallerPaths(processId, processName, btn) {
     const paths = await res.json();
     if (paths.error) throw new Error(paths.error);
     if (!paths.length) { btn.textContent = '∅'; setTimeout(() => btn.textContent = orig, 1500); return; }
-    const text = paths.map(p => p.path).join('\n');
+    // Only copy root-to-process paths, not every intermediate ancestor
+    const roots = paths.filter(p => p.isRoot);
+    const text  = (roots.length ? roots : paths).map(p => p.path).join('\n');
     await navigator.clipboard.writeText(text);
     btn.textContent = '✓';
   } catch(e) {
@@ -1233,19 +1235,10 @@ async function copyActionPaths(type, id, name, app, btn) {
       setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
       return;
     }
-    // Group by processName, then list paths
-    const byProc = new Map();
-    for (const p of paths) {
-      if (!byProc.has(p.processName)) byProc.set(p.processName, []);
-      byProc.get(p.processName).push(p.path);
-    }
-    const lines = [];
-    for (const [proc, procPaths] of byProc) {
-      lines.push(`── via ${proc} ──`);
-      procPaths.forEach(p => lines.push('  ' + p));
-    }
+    // Server only returns root (entry-point) paths — one line per path
+    const lines = paths.map(p => p.path);
     await navigator.clipboard.writeText(lines.join('\n'));
-    btn.textContent = `✓ Copied ${paths.length} paths`;
+    btn.textContent = `✓ Copied ${lines.length} path${lines.length === 1 ? '' : 's'}`;
   } catch(e) {
     btn.textContent = '✗ Error: ' + e.message;
   }

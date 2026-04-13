@@ -105,9 +105,19 @@ Every detail panel (Calculate, Compare, Database, Dialog, List, Execute, etc.) n
 - **`copyActionPaths(type, id, name, app, btn)`** — calls `GET /api/action-paths`:
   - Step 1: finds all processes that reference this action (`t_app_process_object_detail WHERE action_id=@id AND action_type=@type`)
   - Step 2: reverse-BFS each process on the cached graph to get all ancestor paths
-  - Returns: `[{ id, name, processName, path, depth, isRoot }]` de-duped, sorted by processName then depth
-  - Clipboard text is grouped by process: `── via PROCESS_NAME ──\n  EntryA → ... → PROC\n  EntryB → ...`
+  - Returns ONLY root nodes (entry points with no parents). Intermediate ancestors are already
+    encoded inside each root's path string — emitting every ancestor causes exponential explosion
+    (confirmed: a real action produced 39,000 lines before fix).
+  - Returns: `[{ id, name, processName, path, depth }]` de-duped, sorted by processName then depth
+  - Clipboard text: one path per line — `EntryA → SUBMENU → PROC`, `EntryB → PROC`, …
   - Button shows ⏳ while loading, ✓ Copied N paths on success, ∅ if no paths found
+- **`copyCallerPaths`** (group header 📋) also filters `paths.filter(p => p.isRoot)` client-side
+  before building the clipboard text, for the same reason.
+
+> **Bug note:** Initial implementation emitted every BFS ancestor node as a separate result row.
+> For a process with many ancestors this produced tens of thousands of lines. The fix is to
+> emit only root nodes (no reverse-adjacency parents). Each root's `path` string already contains
+> the complete chain from entry point to the containing process.
 
 ### EAR Tester — Reachable Dialogs (BFS)
 - Call graph cached per `server|app` key (15 min TTL). First load ~1 s; switches <10 ms.
@@ -126,7 +136,8 @@ Every detail panel (Calculate, Compare, Database, Dialog, List, Execute, etc.) n
 ## Git Commit Log (recent)
 | Hash | Summary |
 |---|---|
-| `(latest)` | feat: Copy Paths for any action type in detail panel; fix row click; /api/action-paths |
+| `(latest)` | fix: copy-paths only emits root entry-point paths; was emitting all 39k ancestors |
+| `f92f9d5` | feat: Copy Paths for any action type in detail panel; fix row click; /api/action-paths |
 | `bbdf90a` | docs: update CONTEXT.md with schema map, all features, commit log, standing rule |
 | `1236ac4` | feat: drill into all action types (Execute/Send/Receive/Report/etc); copy-paths clipboard button |
 | `164b581` | feat: Explorer 'Who calls this?' reverse BFS for all paths |

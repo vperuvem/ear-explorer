@@ -328,7 +328,12 @@ app.get('/api/action-paths', async (req, res) => {
       }
       for (const [nodeId, path] of pathTo) {
         if (nodeId === procId) continue;
-        const key = nodeId + '|' + path;
+        // Only emit root nodes — nodes with no parents are true entry points.
+        // Every intermediate ancestor is already encoded inside the path string
+        // of the root that reaches it, so emitting intermediates causes explosion.
+        const isRoot = !reverseAdj.has(nodeId) || reverseAdj.get(nodeId).length === 0;
+        if (!isRoot) continue;
+        const key = path; // path string is already unique per root→proc pair
         if (seen.has(key)) continue;
         seen.add(key);
         results.push({
@@ -336,8 +341,7 @@ app.get('/api/action-paths', async (req, res) => {
           name:        nameOf.get(nodeId) || nodeId,
           processName: procName,
           path,
-          depth:       path.split(' → ').length - 1,
-          isRoot:      !reverseAdj.has(nodeId) || reverseAdj.get(nodeId).length === 0
+          depth:       path.split(' → ').length - 1
         });
       }
     }
