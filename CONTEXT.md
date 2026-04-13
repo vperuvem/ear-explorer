@@ -133,7 +133,8 @@ Every detail panel (Calculate, Compare, Database, Dialog, List, Execute, etc.) n
 ## Git Commit Log (recent)
 | Hash | Summary |
 |---|---|
-| `(latest)` | feat: right-click Copy all entry-point paths on any row; remove detail panel button |
+| `(latest)` | fix: add all missing action types to search dropdown; add missing SQL clauses for 10/12/16/17/18/19 |
+| `75db452` | feat: right-click Copy all entry-point paths on any row; remove detail panel button |
 | `dab2937` | fix: copy-paths only emits root entry-point paths; was emitting all 39k ancestors |
 | `f92f9d5` | feat: Copy Paths for any action type in detail panel; fix row click; /api/action-paths |
 | `bbdf90a` | docs: update CONTEXT.md with schema map, all features, commit log, standing rule |
