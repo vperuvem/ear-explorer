@@ -99,20 +99,17 @@ all process step fetches. They LEFT JOIN every action table and COALESCE the `na
 Every detail panel (Calculate, Compare, Database, Dialog, List, Execute, etc.) now has a
 **"📋 Copy Paths to this action"** button appended after the content loads.
 
-- **`injectPathsButton(r)`** — appended via `appendChild` after `innerHTML` is set in every
-  `showXxxDetail` function (showCalcDetail, showCompareDetail, showDbDetail, showDialogDetail,
-  showListDetail, showGenericDetail, showDetail). Skips type=1 (Process already has header button).
-- **`copyActionPaths(type, id, name, app, btn)`** — calls `GET /api/action-paths`:
-  - Step 1: finds all processes that reference this action (`t_app_process_object_detail WHERE action_id=@id AND action_type=@type`)
-  - Step 2: reverse-BFS each process on the cached graph to get all ancestor paths
-  - Returns ONLY root nodes (entry points with no parents). Intermediate ancestors are already
-    encoded inside each root's path string — emitting every ancestor causes exponential explosion
-    (confirmed: a real action produced 39,000 lines before fix).
-  - Returns: `[{ id, name, processName, path, depth }]` de-duped, sorted by processName then depth
-  - Clipboard text: one path per line — `EntryA → SUBMENU → PROC`, `EntryB → PROC`, …
-  - Button shows ⏳ while loading, ✓ Copied N paths on success, ∅ if no paths found
-- **`copyCallerPaths`** (group header 📋) also filters `paths.filter(p => p.isRoot)` client-side
-  before building the clipboard text, for the same reason.
+- **Right-click context menu** (replaces former detail-panel button, which was removed):
+  - Right-click any **group header row** → "🗺 Copy all entry-point paths" → `fetchCopyProcessPaths`
+  - Right-click any **action step row** → same item; type=1 calls `fetchCopyProcessPaths(action_id)`,
+    all other types call `fetchCopyActionPaths(action_type, action_id)`
+  - Right-click any **process list item** (search results) → `fetchCopyProcessPaths`
+  - `fetchCopyProcessPaths(procId, name)` → `GET /api/explorer/all-paths`, filters `isRoot`, copies
+  - `fetchCopyActionPaths(type, id, name)` → `GET /api/action-paths`, copies root paths
+  - `showCtxMenu(x, y, path, allPathsFn)` — separator + "🗺" item hidden when `allPathsFn` is null
+  - `showToast(msg, ms)` — shared toast helper
+  - `/api/action-paths` returns ONLY root nodes. Initial bug emitted every BFS ancestor (39k lines).
+- **`copyCallerPaths`** (group header 📋 button) filters `paths.filter(p => p.isRoot)` before copying
 
 > **Bug note:** Initial implementation emitted every BFS ancestor node as a separate result row.
 > For a process with many ancestors this produced tens of thousands of lines. The fix is to
@@ -136,7 +133,8 @@ Every detail panel (Calculate, Compare, Database, Dialog, List, Execute, etc.) n
 ## Git Commit Log (recent)
 | Hash | Summary |
 |---|---|
-| `(latest)` | fix: copy-paths only emits root entry-point paths; was emitting all 39k ancestors |
+| `(latest)` | feat: right-click Copy all entry-point paths on any row; remove detail panel button |
+| `dab2937` | fix: copy-paths only emits root entry-point paths; was emitting all 39k ancestors |
 | `f92f9d5` | feat: Copy Paths for any action type in detail panel; fix row click; /api/action-paths |
 | `bbdf90a` | docs: update CONTEXT.md with schema map, all features, commit log, standing rule |
 | `1236ac4` | feat: drill into all action types (Execute/Send/Receive/Report/etc); copy-paths clipboard button |

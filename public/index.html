@@ -137,6 +137,7 @@
   .copy-paths-btn { background: none; border: none; cursor: pointer; font-size: 0.8rem; margin-left: 6px;
                     opacity: 0.7; padding: 1px 5px; border-radius: 3px; vertical-align: middle; }
   .copy-paths-btn:hover { opacity: 1; background: rgba(255,255,255,0.3); }
+  /* Note: .copy-paths-btn is kept for the group-header 📋 button */
   .db-statement { background: #f8fafc; color: #000000; font-family: 'Courier New', monospace;
                   font-size: 0.78rem; padding: 12px; border-radius: 6px; white-space: pre-wrap;
                   word-break: break-all; margin-top: 8px; max-height: 400px; overflow-y: auto;
@@ -172,11 +173,12 @@
   #ctx-menu { display:none; position:fixed; z-index:9999;
               background:#ffffff; border:1.5px solid #c4b5fd;
               border-radius:8px; box-shadow:0 6px 20px rgba(124,58,237,0.18);
-              padding:4px 0; min-width:180px; }
+              padding:4px 0; min-width:210px; }
   .ctx-item { display:flex; align-items:center; gap:8px;
               padding:9px 16px; cursor:pointer; font-size:0.84rem;
               color:#1e1b4b; user-select:none; }
   .ctx-item:hover { background:#ede9fe; }
+  .ctx-sep  { height:1px; background:#e5e7eb; margin:2px 0; }
 
   /* ── Copy toast ──────────────────────────────────────────── */
   #copy-toast { position:fixed; bottom:28px; left:50%; transform:translateX(-50%) translateY(20px);
@@ -251,6 +253,8 @@
 <!-- Right-click context menu -->
 <div id="ctx-menu">
   <div class="ctx-item" id="ctx-copy-path">📋 Copy path to here</div>
+  <div class="ctx-sep"  id="ctx-sep"       style="display:none"></div>
+  <div class="ctx-item" id="ctx-all-paths"  style="display:none">🗺 Copy all entry-point paths</div>
 </div>
 
 <!-- Copy toast -->
@@ -459,7 +463,13 @@ function renderProcessList() {
   }).join('');
   // Attach click handlers after rendering using the data-id to look up the process
   container.querySelectorAll('.proc-list-item').forEach((el, i) => {
-    el.addEventListener('click', () => openProcess(searchList[i].id, searchList[i].name, true));
+    const p = searchList[i];
+    el.addEventListener('click', () => openProcess(p.id, p.name, true));
+    el.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      showCtxMenu(e.clientX, e.clientY, p.name,
+        () => fetchCopyProcessPaths(p.id, p.name));
+    });
   });
 }
 
@@ -633,6 +643,12 @@ function renderTable() {
       const toggleIcon = autoExpand ? '' : `<span class="toggle-icon">▶</span>`;
       th.innerHTML = `<td colspan="6">${toggleIcon}⚙️ <span class="proc-name-link" onclick="event.stopPropagation();drillInto('${escId}','${escName}')">${esc(r.process_name)}</span><span class="proc-badge">${groupCount} steps</span><span class="callers-link" onclick="event.stopPropagation();showCallers('${escId}','${escName}')">👥 Who calls this?</span><button class="copy-paths-btn" title="Copy all call paths to clipboard" onclick="event.stopPropagation();copyCallerPaths('${escId}','${escName}',this)">📋</button></td>`;
       if (!autoExpand) th.onclick = () => toggleGroup(thisKey, th);
+      th.addEventListener('contextmenu', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        showCtxMenu(e.clientX, e.clientY, r.process_name,
+          () => fetchCopyProcessPaths(r.process_id, r.process_name));
+      });
       tbody.appendChild(th);
     }
     const tr = document.createElement('tr');
@@ -682,18 +698,22 @@ function renderTable() {
     };
     tr.addEventListener('contextmenu', e => {
       e.preventDefault();
-      // Build path: for each drill, include the FROM process name AND the step label
-      // that was clicked to navigate into the next process (how you got there).
-      // Format: FromProcess → StepLabel → NextProcess → … → CurrentProcess → ClickedAction
+      // Build nav path: FromProcess → StepLabel → … → CurrentProcess → ClickedAction
       const parts = [];
       for (const s of navStack) {
         if (s.mode !== 'detail') continue;
-        parts.push(s.backLabel);                         // the FROM process
-        if (s.navLabel) parts.push(s.navLabel);          // the step label clicked to navigate
+        parts.push(s.backLabel);
+        if (s.navLabel) parts.push(s.navLabel);
       }
-      parts.push(document.getElementById('inp-process').value.trim()); // current process
-      if (r.action_name) parts.push(r.action_name);                    // right-clicked step
-      showCtxMenu(e.clientX, e.clientY, parts.join(' → '));
+      parts.push(document.getElementById('inp-process').value.trim());
+      if (r.action_name) parts.push(r.action_name);
+      // "Copy all entry-point paths" fn — type 1 means it IS a process call
+      const allPathsFn = r.action_id
+        ? (r.action_type === 1
+            ? () => fetchCopyProcessPaths(r.action_id, r.action_name)
+            : () => fetchCopyActionPaths(r.action_type, r.action_id, r.action_name))
+        : null;
+      showCtxMenu(e.clientX, e.clientY, parts.join(' → '), allPathsFn);
     });
     tbody.appendChild(tr);
   });
@@ -933,7 +953,6 @@ async function showDialogDetail(r, tr) {
   }
 
   document.getElementById('detail-content').appendChild(extra);
-  injectPathsButton(r);
 }
 
 // Switch screen format tabs
@@ -981,7 +1000,6 @@ async function showCompareDetail(r, tr) {
     document.getElementById('detail-content').innerHTML =
       row('Description', d.description) +
       `<div style="margin-top:10px;padding:10px 14px;background:linear-gradient(90deg,#ede9fe,#dbeafe);border-radius:8px;font-family:monospace;color:#000000;font-size:0.9rem;font-weight:600;border:1.5px solid #a78bfa;box-shadow:0 2px 8px rgba(124,58,237,0.12)">${expr} ?</div>`;
-    injectPathsButton(r);
   } catch(e) {
     document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
   }
@@ -1044,7 +1062,6 @@ async function showCalcDetail(r, tr) {
     });
     html += '</tbody></table>';
     document.getElementById('detail-content').innerHTML = html;
-    injectPathsButton(r);
   } catch(e) {
     document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
   }
@@ -1100,7 +1117,6 @@ async function showDbDetail(r, tr) {
       <hr style="border-color:#d0d7e8;margin:10px 0"/>
     `).join('');
     document.getElementById('detail-content').innerHTML = html;
-    injectPathsButton(r);
   } catch(e) {
     document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
   }
@@ -1135,7 +1151,6 @@ async function showListDetail(r, tr) {
       (op1 ? `<div class="detail-row"><span class="detail-label">Operand 1</span><span class="detail-val">${op1}</span></div>` : '') +
       (op2 ? `<div class="detail-row"><span class="detail-label">Operand 2</span><span class="detail-val">${op2}</span></div>` : '') +
       (d.operator_name === 'Find' ? row('Find Exact', d.find_exact ? 'Yes' : 'No') : '');
-    injectPathsButton(r);
   } catch(e) {
     document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
   }
@@ -1172,7 +1187,6 @@ async function showGenericDetail(r, tr) {
       row('Name',        d.name || r.action_name) +
       row('Description', d.description) +
       extra;
-    injectPathsButton(r);
   } catch(e) {
     document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
   }
@@ -1195,7 +1209,6 @@ function showDetail(r, tr) {
     ['Process ID',  `<span style="font-size:0.75rem">${esc(r.process_id)}</span>`],
   ].map(([l,v]) => `<div class="detail-row"><span class="detail-label">${l}</span><span class="detail-val">${v||'—'}</span></div>`).join('');
   document.getElementById('detail-panel').style.display = 'block';
-  injectPathsButton(r); // also for rows with action_id that aren't specifically handled
 }
 
 function closeDetail() {
@@ -1203,60 +1216,21 @@ function closeDetail() {
   document.querySelectorAll('tbody tr.selected').forEach(el => el.classList.remove('selected'));
 }
 
-// ── "Copy Paths" button injected into the detail panel for any non-process action ─
-function injectPathsButton(r) {
-  if (!r.action_id || r.action_type === 1) return; // process type uses the header button
-  const dc  = document.getElementById('detail-content');
-  const app = document.getElementById('inp-app').value.trim();
-  const btn = document.createElement('button');
-  btn.textContent = '📋 Copy Paths to this action';
-  btn.title = 'Copy all entry-point paths that reach this action to clipboard';
-  btn.style.cssText = 'margin-top:14px;display:block;width:100%;padding:7px 0;background:#ede9fe;'
-    + 'border:1.5px solid #a78bfa;border-radius:6px;color:#5b21b6;font-weight:600;'
-    + 'font-size:0.82rem;cursor:pointer;transition:background 0.15s';
-  btn.onmouseenter = () => btn.style.background = '#ddd6fe';
-  btn.onmouseleave = () => btn.style.background = '#ede9fe';
-  btn.onclick = () => copyActionPaths(r.action_type, r.action_id, r.action_name, app, btn);
-  dc.appendChild(btn);
-}
-
-async function copyActionPaths(type, id, name, app, btn) {
-  const orig = btn.textContent;
-  btn.textContent = '⏳ Fetching paths…';
-  btn.disabled = true;
-  try {
-    const res   = await fetch(
-      `/api/action-paths?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}`
-      + `&app=${encodeURIComponent(app)}&server=${encodeURIComponent(getServer())}`);
-    const paths = await res.json();
-    if (paths.error) throw new Error(paths.error);
-    if (!paths.length) {
-      btn.textContent = '∅ No paths found';
-      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
-      return;
-    }
-    // Server only returns root (entry-point) paths — one line per path
-    const lines = paths.map(p => p.path);
-    await navigator.clipboard.writeText(lines.join('\n'));
-    btn.textContent = `✓ Copied ${lines.length} path${lines.length === 1 ? '' : 's'}`;
-  } catch(e) {
-    btn.textContent = '✗ Error: ' + e.message;
-  }
-  setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2500);
-}
-
 document.getElementById('inp-process').addEventListener('keydown', e => { if(e.key==='Enter') loadData(); });
 
 // ── Right-click context menu ─────────────────────────────────────────────────
-let _ctxPath = '';
+let _ctxPath     = '';
+let _ctxAllPaths = null; // async fn → string message, or null if not applicable
 
-function showCtxMenu(x, y, path) {
-  _ctxPath = path;
+function showCtxMenu(x, y, path, allPathsFn) {
+  _ctxPath     = path;
+  _ctxAllPaths = allPathsFn || null;
+  document.getElementById('ctx-all-paths').style.display = allPathsFn ? 'flex'  : 'none';
+  document.getElementById('ctx-sep').style.display       = allPathsFn ? 'block' : 'none';
   const menu = document.getElementById('ctx-menu');
   menu.style.display = 'block';
   menu.style.left = x + 'px';
   menu.style.top  = y + 'px';
-  // Reposition if it overflows the viewport
   requestAnimationFrame(() => {
     const r = menu.getBoundingClientRect();
     if (r.right  > window.innerWidth)  menu.style.left = (x - r.width)  + 'px';
@@ -1268,21 +1242,61 @@ function hideCtxMenu() {
   document.getElementById('ctx-menu').style.display = 'none';
 }
 
+function showToast(msg, durationMs) {
+  const toast = document.getElementById('copy-toast');
+  toast.textContent = msg;
+  toast.classList.add('show');
+  setTimeout(() => { toast.classList.remove('show'); toast.textContent = '✓ Copied'; }, durationMs || 1800);
+}
+
 document.getElementById('ctx-copy-path').addEventListener('click', () => {
   hideCtxMenu();
-  navigator.clipboard.writeText(_ctxPath).then(() => {
-    const toast = document.getElementById('copy-toast');
-    toast.classList.add('show');
-    setTimeout(() => toast.classList.remove('show'), 1800);
-  });
+  navigator.clipboard.writeText(_ctxPath).then(() => showToast('✓ Path copied'));
 });
+
+document.getElementById('ctx-all-paths').addEventListener('click', async () => {
+  hideCtxMenu();
+  if (!_ctxAllPaths) return;
+  showToast('⏳ Fetching paths…', 30000);
+  const msg = await _ctxAllPaths();
+  showToast(msg || '✓ Copied', 2500);
+});
+
+// ── Helpers called by right-click "Copy all entry-point paths" ────────────────
+async function fetchCopyProcessPaths(procId, procName) {
+  const app = document.getElementById('inp-app').value.trim();
+  try {
+    const res   = await fetch(`/api/explorer/all-paths?id=${encodeURIComponent(procId)}&app=${encodeURIComponent(app)}&server=${encodeURIComponent(getServer())}`);
+    const paths = await res.json();
+    if (paths.error) throw new Error(paths.error);
+    const list = paths.filter(p => p.isRoot);
+    if (!list.length) return `∅ No entry-point paths to "${procName}"`;
+    await navigator.clipboard.writeText(list.map(p => p.path).join('\n'));
+    return `✓ Copied ${list.length} path${list.length === 1 ? '' : 's'} to ${procName}`;
+  } catch(e) { return '✗ ' + e.message; }
+}
+
+async function fetchCopyActionPaths(type, id, name) {
+  const app = document.getElementById('inp-app').value.trim();
+  try {
+    const res   = await fetch(`/api/action-paths?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}&app=${encodeURIComponent(app)}&server=${encodeURIComponent(getServer())}`);
+    const paths = await res.json();
+    if (paths.error) throw new Error(paths.error);
+    if (!paths.length) return `∅ No entry-point paths to "${name}"`;
+    await navigator.clipboard.writeText(paths.map(p => p.path).join('\n'));
+    return `✓ Copied ${paths.length} path${paths.length === 1 ? '' : 's'} to ${name}`;
+  } catch(e) { return '✗ ' + e.message; }
+}
 
 // Hide menu on any click or right-click outside it
 document.addEventListener('click', e => {
   if (!e.target.closest('#ctx-menu')) hideCtxMenu();
 });
 document.addEventListener('contextmenu', e => {
-  if (!e.target.closest('#ctx-menu') && !e.target.closest('#tbody')) hideCtxMenu();
+  if (!e.target.closest('#ctx-menu')
+    && !e.target.closest('#tbody')
+    && !e.target.closest('.group-header')
+    && !e.target.closest('.proc-list-view')) hideCtxMenu();
 });
 
 // On first load: show T_DEVICE processes; if that fails, fall back to a normal search
