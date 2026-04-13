@@ -674,8 +674,23 @@ app.get('/api/tester/dynamic-menus', async (req, res) => {
   } catch(e) { sendErr(res, e); }
 });
 
+// ── Launch VirtTerm ───────────────────────────────────────────────────────────
+const VIRTTERM_EXE = 'C:\\Users\\PVenkatesh\\Downloads\\VirtualScanner\\x86\\VirtTerm.exe';
+
+app.post('/api/launch-virtterm', (_req, res) => {
+  try {
+    const proc = spawn(VIRTTERM_EXE, [], { detached: true, stdio: 'ignore' });
+    proc.unref();
+    console.log(`[virtterm] launched pid=${proc.pid}`);
+    send(res, { ok: true, pid: proc.pid });
+  } catch (e) {
+    console.error('[virtterm] launch failed:', e.message);
+    sendErr(res, e);
+  }
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────────
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 http.createServer(app).listen(PORT, () => {
   console.log(`EAR Explorer running at http://localhost:${PORT}`);
   exec(`start http://localhost:${PORT}`);

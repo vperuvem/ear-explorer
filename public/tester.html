@@ -150,6 +150,7 @@
   </select>
   <button id="btn-run" onclick="runTests()">▶ Run Tests</button>
   <button onclick="loadResults()" style="background:#ede9fe;color:#6d28d9;border:1.5px solid #c4b5fd;">⟳ Refresh</button>
+  <button id="btn-vt" onclick="launchVirtTerm()" style="background:#059669;color:#fff;border:none;">🖥 VirtTerm</button>
   <a id="report-link" href="#" target="_blank" class="nav-link">📊 Report</a>
   <span class="stat-chip pass-chip"><span class="num" id="stat-pass">—</span><span class="lbl">PASS</span></span>
   <span class="stat-chip fail-chip"><span class="num" id="stat-fail">—</span><span class="lbl">FAIL</span></span>
@@ -285,6 +286,22 @@ async function runTests() {
   if (d.status === 'already_running') { alert('Tests already running.'); return; }
   setRunning(true);
   if (!polling) polling = setInterval(checkStatus, 2500);
+}
+
+async function launchVirtTerm() {
+  const btn = document.getElementById('btn-vt');
+  btn.disabled = true;
+  btn.textContent = '⏳ Launching…';
+  try {
+    const d = await (await fetch('/api/launch-virtterm', { method: 'POST' })).json();
+    if (!d.ok) throw new Error(d.error || 'Unknown error');
+    btn.textContent = '✅ Launched';
+  } catch(e) {
+    alert('Could not launch VirtTerm: ' + e.message);
+    btn.textContent = '🖥 VirtTerm';
+  } finally {
+    setTimeout(() => { btn.disabled = false; btn.textContent = '🖥 VirtTerm'; }, 3000);
+  }
 }
 
 async function checkStatus() {
