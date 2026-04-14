@@ -245,25 +245,28 @@ L__ [H] IME  "Default IME"
 
 ### VirtTerm.ps1 Bug Status (updated 2026-04-14)
 
-**Bug 1 — `Get-VirtTermScreen` — FIXED (commit 733c8b9 in ear-tester)**
-Old code skipped hidden windows, missing ConsoleEcho entirely.
-Fixed: walks all children via ScrnClass → finds Edit grandchild → returns full text.
-```powershell
-function Get-VirtTermScreen {
-    if ($script:VTHwnd -eq [IntPtr]::Zero) { return "" }
-    foreach ($child in [WinApi]::GetChildWindows($script:VTHwnd)) {
-        if ([WinApi]::GetClass($child) -eq "ScrnClass") {
-            foreach ($grand in [WinApi]::GetChildWindows($child)) {
-                if ([WinApi]::GetClass($grand) -eq "Edit") {
-                    return [WinApi]::GetText($grand)
-                }
-            }
-        }
-    }
-    return ""
-}
+**Bug 1 — `Get-VirtTermScreen` — FIXED (commit 9ebeaa7 in ear-tester)**
+Two separate layers of bugs, both now resolved:
+
+*Layer A (old):* Old code skipped hidden windows, missing ConsoleEcho entirely.
+Fixed by walking ScrnClass → Edit grandchild.
+
+*Layer B (new, 2026-04-14):* `GetWindowTextLength` returns the window CAPTION length for VB6 Edit controls — "ConsoleEcho" = 11 chars — NOT the actual buffer content length. So `GetText` allocated only a 12-byte buffer and returned "ConsoleEcho" (the title), never the real terminal text.
+
+**Root cause confirmed by diagnostic:** `_vtdiag.ps1` showed `titleLen=11, largeLen=168` for the Edit control. The `largeLen` (via `SendMessage(WM_GETTEXT, 8192, sb)`) correctly returned 168 chars of real content.
+
+**Fix:** Added `GetLargeText(IntPtr hWnd)` to the `WinApi` C# class — uses `SendMessage(WM_GETTEXT, (IntPtr)8192, sb)` with a fixed large buffer, bypassing `GetWindowTextLength` entirely. `Get-VirtTermScreen` now calls `GetLargeText` instead of `GetText`.
+
+**Confirmed working:** Screen now returns:
 ```
-`virtterm-tests.ps1` `$screen.Count -eq 0` check also fixed → `[string]::IsNullOrWhiteSpace($screen)`.
+ HighJump Software
+    Warehouse
+    Advantage
+ Version 05-31-17
+
+FORKLIFT
+F2: No PIT
+```
 
 **Bug 2 — `Get-VirtTermHwnd` fallback scope bug — FIXED (commit 60422c8)**
 Root cause: `$hwnd = $h` inside `EnumWindows` script-block created a local variable, never updating the outer `$hwnd`.
@@ -387,10 +390,12 @@ Suite: VirtTerm
 ## Pending / Next Steps
 
 ### VirtTerm / Tester
-1. ✅ **`Get-VirtTermScreen` fixed** — reads ConsoleEcho hidden Edit via ScrnClass (commit 733c8b9)
+1. ✅ **`Get-VirtTermScreen` fixed (both layers)** — reads ConsoleEcho via `GetLargeText` / `WM_GETTEXT` (commit 9ebeaa7)
 2. ✅ **`Send-VirtTermKey` was fine** — terminal display artifact, not real corruption
-3. **`Get-VirtTermHwnd` scope bug** — still open but mitigated; fix if needed with List capture
-4. **End-to-end logon test** — next priority: launch → wait for "User ID" prompt → send real credentials → wait for main menu → verify screen content.
+3. ✅ **`Get-VirtTermHwnd` scope bug FIXED** — C# `FindWindowByPid` (commit 60422c8)
+4. ✅ **`_writeAll.js` now generates `VirtTerm.ps1`** — canonical source for all 4 generated files
+5. **`SendKeys` "Access is denied"** — `Send-VirtTermText` / `Send-VirtTermKey` fail when run from a non-interactive (background) process due to UIPI. Must run `.\Run-Tests.ps1` directly in the interactive terminal session, NOT via `launch-process` or `powershell -File`. Previous runs from the interactive session passed; the current test launcher uses a background process.
+6. **End-to-end logon test** — next priority once SendWait is resolved: launch → wait for "User ID" prompt → send real credentials → wait for main menu → verify screen content.
    - **Credentials source:** `AAD.dbo.t_employee` — columns: `id` (username), `password` (plaintext), `status` (A=Active/T=Terminated), `menu_level`, `emp_number`, `wh_id`
    - **Test user chosen:** `id=000002` / `password=00002` — Vogel, Charles H.E., status=A, menu_level=WHSSUPUSER, wh_id=1
    - Credentials updated in `virtterm-tests.ps1` (commit in ear-tester). No longer placeholder values.
