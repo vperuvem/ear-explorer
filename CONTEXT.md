@@ -265,10 +265,10 @@ function Get-VirtTermScreen {
 ```
 `virtterm-tests.ps1` `$screen.Count -eq 0` check also fixed → `[string]::IsNullOrWhiteSpace($screen)`.
 
-**Bug 2 — `Get-VirtTermHwnd` fallback scope bug — STILL OPEN**
-`$hwnd = $h` inside `EnumWindows` delegate doesn't update outer `$hwnd`.
-Mitigated in practice: `MainWindowHandle` path works once VirtTerm is fully launched.
-Fix when needed: use `[System.Collections.Generic.List[IntPtr]]` to capture across delegate boundary.
+**Bug 2 — `Get-VirtTermHwnd` fallback scope bug — FIXED (commit 60422c8)**
+Root cause: `$hwnd = $h` inside `EnumWindows` script-block created a local variable, never updating the outer `$hwnd`.
+Fix: added `FindWindowByPid(int pid)` static method to the C# `WinApi` class. It runs `EnumWindows` in C# where closures capture by reference correctly. `Get-VirtTermHwnd` now calls `[WinApi]::FindWindowByPid($script:VTProcess.Id)` in the fallback path.
+Also added: `if (-not ([System.Management.Automation.PSTypeName]'WinApi').Type)` guard around `Add-Type` to prevent "type already defined" errors when dot-sourced twice in the same session.
 
 **Bug 3 — `Send-VirtTermKey` — FALSE ALARM**
 What appeared garbled in terminal output was terminal line-wrapping at 80 cols.
@@ -352,7 +352,7 @@ Previous edit left duplicate entries (Execute, List, Receive, Send, User appeare
 
 ### What is broken / not yet working
 1. **`Get-VirtTermScreen` returns empty** → see Bug 1 above → logon test always times out
-2. **`Get-VirtTermHwnd` fallback broken** → see Bug 2 above → window not found if config dialog is active
+2. ~~**`Get-VirtTermHwnd` fallback broken**~~ → FIXED — now uses C# `FindWindowByPid`
 3. **`Send-VirtTermKey` param block may be garbled** → see Bug 3 above → dot-source may fail
 4. **No automated logon test passing** — the full sequence (launch → wait for login screen → type user/pass → wait for menu) has never successfully completed because screen reads return nothing
 
