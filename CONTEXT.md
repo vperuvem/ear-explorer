@@ -390,7 +390,10 @@ Suite: VirtTerm
 1. ✅ **`Get-VirtTermScreen` fixed** — reads ConsoleEcho hidden Edit via ScrnClass (commit 733c8b9)
 2. ✅ **`Send-VirtTermKey` was fine** — terminal display artifact, not real corruption
 3. **`Get-VirtTermHwnd` scope bug** — still open but mitigated; fix if needed with List capture
-4. **End-to-end logon test** — next priority: launch → wait for "User ID" prompt → send real credentials → wait for main menu → verify screen content. Need to know actual test credentials.
+4. **End-to-end logon test** — next priority: launch → wait for "User ID" prompt → send real credentials → wait for main menu → verify screen content.
+   - **Credentials source:** `AAD.dbo.t_employee` — query this table to find username/password columns for test users.
+   - Credentials should be passed as `-Username` / `-Password` params to `Run-Tests.ps1`, not hardcoded.
+   - Current placeholders in `virtterm-tests.ps1`: `TESTUSER` (line 63) and `TEST` (line 87) — replace with real values from `AAD.dbo.t_employee`.
 5. **Automated VirtTerm config** — show hidden `#32770` dialog → set ID=1000 (host), ID=1001 (port), ID=1002 (device) → click OK (ID=1) — so tests can connect to any environment without manual setup.
 6. **ear-tester has no GitHub remote** — changes committed locally only. Set up remote with `git remote add origin <url>` if needed.
 
