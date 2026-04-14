@@ -243,40 +243,36 @@ L__ [H] IME  "Default IME"
   Alternatively `PostMessage(ScrnClass, WM_CHAR, ...)` for background sending.
 - **`_vtree.ps1`**: PowerShell script in repo root — run it while VirtTerm is open to re-dump the full control tree with IDs, visibility flags, and Edit content.
 
-### ⚠️ Known bugs in `tests/VirtTerm.ps1`
+### VirtTerm.ps1 Bug Status (updated 2026-04-14)
 
-**Bug 1 — `Get-VirtTermScreen` never reads screen content (CRITICAL)**
+**Bug 1 — `Get-VirtTermScreen` — FIXED (commit 733c8b9 in ear-tester)**
+Old code skipped hidden windows, missing ConsoleEcho entirely.
+Fixed: walks all children via ScrnClass → finds Edit grandchild → returns full text.
 ```powershell
-# BROKEN: skips hidden children → misses ConsoleEcho
-foreach ($child in [WinApi]::GetChildWindows($script:VTHwnd)) {
-    if (-not [WinApi]::IsWindowVisible($child)) { continue }   # ← ConsoleEcho is hidden!
+function Get-VirtTermScreen {
+    if ($script:VTHwnd -eq [IntPtr]::Zero) { return "" }
+    foreach ($child in [WinApi]::GetChildWindows($script:VTHwnd)) {
+        if ([WinApi]::GetClass($child) -eq "ScrnClass") {
+            foreach ($grand in [WinApi]::GetChildWindows($child)) {
+                if ([WinApi]::GetClass($grand) -eq "Edit") {
+                    return [WinApi]::GetText($grand)
+                }
+            }
+        }
+    }
+    return ""
+}
 ```
-ConsoleEcho is hidden by design. The current code skips it, returns only button captions.
-`Wait-VirtTermScreen -Contains 'Password'` therefore always times out.
+`virtterm-tests.ps1` `$screen.Count -eq 0` check also fixed → `[string]::IsNullOrWhiteSpace($screen)`.
 
-**Fix needed:** Walk the full subtree recursively, skip the `IsWindowVisible` guard, find the
-`Edit` control whose text matches screen-format content (starts with spaces / has Advantage layout).
-Or search by class `Edit` + window title `ConsoleEcho` specifically.
+**Bug 2 — `Get-VirtTermHwnd` fallback scope bug — STILL OPEN**
+`$hwnd = $h` inside `EnumWindows` delegate doesn't update outer `$hwnd`.
+Mitigated in practice: `MainWindowHandle` path works once VirtTerm is fully launched.
+Fix when needed: use `[System.Collections.Generic.List[IntPtr]]` to capture across delegate boundary.
 
-**Bug 2 — `Get-VirtTermHwnd` fallback has PowerShell scope bug**
-```powershell
-$hwnd = [IntPtr]::Zero
-[WinApi]::EnumWindows([WinApi+EnumChildProc]{
-    param($h, $_)
-    if ($info.Id -eq $pid) { $hwnd = $h; return $false }   # ← $hwnd is not outer $hwnd
-    ...
-```
-Inside the delegate, `$hwnd = $h` creates a local variable, not the outer one.
-If `MainWindowHandle` is zero (happens while config dialog is active), the fallback returns Zero.
-
-**Fix needed:** Use `[ref]` or a `[System.Collections.Generic.List[IntPtr]]` to capture the handle
-across the delegate boundary, or use a simpler approach: `Get-Process VirtTerm | .MainWindowHandle`
-after the config dialog closes.
-
-**Bug 3 — `Send-VirtTermKey` param block is garbled in the file**
-The `-Key` parameter `[ValidateSet(...)]` attribute is corrupted / wrapped mid-line in the file.
-This may cause a parse error when the script is dot-sourced.
-Needs to be verified and rewritten cleanly.
+**Bug 3 — `Send-VirtTermKey` — FALSE ALARM**
+What appeared garbled in terminal output was terminal line-wrapping at 80 cols.
+The actual file content is correct — `[ValidateSet(...)]`, `[string]$Key`, and `$map` are all intact.
 
 ---
 
@@ -390,12 +386,13 @@ Suite: VirtTerm
 
 ## Pending / Next Steps
 
-### VirtTerm / Tester (HIGHEST PRIORITY — no tests pass yet)
-1. **Fix `Get-VirtTermScreen`** — walk child tree recursively, do NOT skip hidden windows, find `ConsoleEcho` Edit by name or class, read via `GetWindowText`. This is the root cause of all logon test failures.
-2. **Fix `Get-VirtTermHwnd` scope bug** — `$hwnd = $h` inside an `EnumWindows` delegate is a local assignment. Use a `[System.Collections.Generic.List[IntPtr]]` or `[ref]` to capture across boundary.
-3. **Fix `Send-VirtTermKey`** — the `[ValidateSet(...)]` attribute block appears garbled/corrupted. Verify the file parses cleanly after dot-sourcing.
-4. **End-to-end logon test** — full sequence: launch → wait for "User ID" → send credentials → wait for main menu → verify screen content.
+### VirtTerm / Tester
+1. ✅ **`Get-VirtTermScreen` fixed** — reads ConsoleEcho hidden Edit via ScrnClass (commit 733c8b9)
+2. ✅ **`Send-VirtTermKey` was fine** — terminal display artifact, not real corruption
+3. **`Get-VirtTermHwnd` scope bug** — still open but mitigated; fix if needed with List capture
+4. **End-to-end logon test** — next priority: launch → wait for "User ID" prompt → send real credentials → wait for main menu → verify screen content. Need to know actual test credentials.
 5. **Automated VirtTerm config** — show hidden `#32770` dialog → set ID=1000 (host), ID=1001 (port), ID=1002 (device) → click OK (ID=1) — so tests can connect to any environment without manual setup.
+6. **ear-tester has no GitHub remote** — changes committed locally only. Set up remote with `git remote add origin <url>` if needed.
 
 ### EAR Explorer (nice to have)
 - Paths table: filter option to show only entry-point rows (hide intermediate ancestors)
