@@ -178,6 +178,25 @@ L__ [H] IME  "Default IME"
 
 ---
 
+## Demo-Critical Fixes (applied after 0-2 demo failure)
+
+### Fix 1 — Clipboard API on HTTP/IP access
+`navigator.clipboard.writeText()` requires HTTPS or localhost. On a LAN IP demo the API is undefined → TypeError.
+**Fix:** `writeToClipboard(text)` helper tries `navigator.clipboard` first, falls back to `textarea + execCommand('copy')`.
+All 4 call sites replaced. Located around line 1265 in index.html.
+
+### Fix 2 — Search result click: scroll to and flash matched action
+Clicking a Calculate/Compare/Field (etc.) search result opened the parent process at the top with no indication of which step matched. Looked broken.
+**Fix:** `openProcess(processId, processName, pushToStack, targetActionName)` — 4th param added.
+- After `renderTable()`, scans all `tr.detail-row` for `td.action-name` matching the target (case-insensitive partial match).
+- Expands the group if it was collapsed (calls `toggleGroup`).
+- Adds `search-match` CSS class → purple flash animation for 2 s.
+- Scrolls to the first match with `scrollIntoView({ behavior:'smooth', block:'center' })`.
+`renderProcessList` click handler updated: passes `p.action_name` for non-process results, null for process results.
+
+### Fix 3 — Search dropdown duplicates
+Previous edit left duplicate entries (Execute, List, Receive, Send, User appeared twice). Fixed in de9e31f.
+
 ## Pending / Next Steps
 
 ### VirtTerm Screen Recorder (NOT YET BUILT)

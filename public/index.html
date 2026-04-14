@@ -134,6 +134,12 @@
   tr.compare-clickable td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
   tr.dialog-clickable  td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
   tr.generic-clickable td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
+  @keyframes searchFlash {
+    0%   { outline: 3px solid #7c3aed; background: #ede9fe; }
+    50%  { outline: 3px solid #7c3aed; background: #c4b5fd; }
+    100% { outline: none; }
+  }
+  tr.search-match { animation: searchFlash 1.6s ease-out forwards; }
   .copy-paths-btn { background: none; border: none; cursor: pointer; font-size: 0.8rem; margin-left: 6px;
                     opacity: 0.7; padding: 1px 5px; border-radius: 3px; vertical-align: middle; }
   .copy-paths-btn:hover { opacity: 1; background: rgba(255,255,255,0.3); }
@@ -411,8 +417,9 @@ function updateBackButton() {
   backBtn.textContent = `← ${top.backLabel}`;
 }
 
-// Open a specific process by ID — shows its steps
-async function openProcess(processId, processName, pushToStack) {
+// Open a specific process by ID — shows its steps.
+// targetActionName: if set, the matching step row(s) will be expanded, scrolled to, and flashed.
+async function openProcess(processId, processName, pushToStack, targetActionName) {
   const app = document.getElementById('inp-app').value.trim();
   if (pushToStack) {
     const searchTerm = document.getElementById('inp-process').value;
@@ -429,6 +436,30 @@ async function openProcess(processId, processName, pushToStack) {
     viewMode = 'detail';
     closeDetail();
     renderTable();
+    // Scroll to and flash the matching action row(s) from a search result click
+    if (targetActionName) {
+      const needle = targetActionName.toLowerCase();
+      // Find all group rows that belong to this action name
+      const allDetailRows = document.querySelectorAll('tr.detail-row');
+      let firstMatch = null;
+      allDetailRows.forEach(row => {
+        const nameCell = row.querySelector('td.action-name');
+        if (nameCell && nameCell.textContent.toLowerCase().includes(needle)) {
+          // Make sure the group is expanded
+          const groupKey = row.dataset.group;
+          if (groupKey && row.style.display === 'none') {
+            const header = document.querySelector(`tr.group-header[data-group="${groupKey}"]`);
+            if (header) toggleGroup(groupKey, header);
+          }
+          row.classList.add('search-match');
+          setTimeout(() => row.classList.remove('search-match'), 2000);
+          if (!firstMatch) firstMatch = row;
+        }
+      });
+      if (firstMatch) {
+        firstMatch.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
   } catch(e) {
     alert('Error: ' + e.message);
   }
@@ -470,7 +501,8 @@ function renderProcessList() {
   // Attach click handlers after rendering using the data-id to look up the process
   container.querySelectorAll('.proc-list-item').forEach((el, i) => {
     const p = searchList[i];
-    el.addEventListener('click', () => openProcess(p.id, p.name, true));
+    // For non-process search results, pass the action name so the row is highlighted after load
+    el.addEventListener('click', () => openProcess(p.id, p.name, true, p.match_type !== '1' ? p.action_name : null));
     el.addEventListener('contextmenu', e => {
       e.preventDefault();
       showCtxMenu(e.clientX, e.clientY, p.name,
@@ -814,7 +846,7 @@ async function copyCallerPaths(processId, processName, btn) {
     // Only copy root-to-process paths, not every intermediate ancestor
     const roots = paths.filter(p => p.isRoot);
     const text  = (roots.length ? roots : paths).map(p => p.path).join('\n');
-    await navigator.clipboard.writeText(text);
+    await writeToClipboard(text);
     btn.textContent = '✓';
   } catch(e) {
     btn.textContent = '✗';
@@ -1248,6 +1280,22 @@ function hideCtxMenu() {
   document.getElementById('ctx-menu').style.display = 'none';
 }
 
+// Clipboard helper — navigator.clipboard requires HTTPS or localhost.
+// Falls back to execCommand for demos run over plain HTTP on a LAN IP.
+async function writeToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    await navigator.clipboard.writeText(text);
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
+}
+
 function showToast(msg, durationMs) {
   const toast = document.getElementById('copy-toast');
   toast.textContent = msg;
@@ -1257,7 +1305,7 @@ function showToast(msg, durationMs) {
 
 document.getElementById('ctx-copy-path').addEventListener('click', () => {
   hideCtxMenu();
-  navigator.clipboard.writeText(_ctxPath).then(() => showToast('✓ Path copied'));
+  writeToClipboard(_ctxPath).then(() => showToast('✓ Path copied')).catch(() => showToast('✗ Copy failed'));
 });
 
 document.getElementById('ctx-all-paths').addEventListener('click', async () => {
@@ -1277,7 +1325,7 @@ async function fetchCopyProcessPaths(procId, procName) {
     if (paths.error) throw new Error(paths.error);
     const list = paths.filter(p => p.isRoot);
     if (!list.length) return `∅ No entry-point paths to "${procName}"`;
-    await navigator.clipboard.writeText(list.map(p => p.path).join('\n'));
+    await writeToClipboard(list.map(p => p.path).join('\n'));
     return `✓ Copied ${list.length} path${list.length === 1 ? '' : 's'} to ${procName}`;
   } catch(e) { return '✗ ' + e.message; }
 }
@@ -1289,7 +1337,7 @@ async function fetchCopyActionPaths(type, id, name) {
     const paths = await res.json();
     if (paths.error) throw new Error(paths.error);
     if (!paths.length) return `∅ No entry-point paths to "${name}"`;
-    await navigator.clipboard.writeText(paths.map(p => p.path).join('\n'));
+    await writeToClipboard(paths.map(p => p.path).join('\n'));
     return `✓ Copied ${paths.length} path${paths.length === 1 ? '' : 's'} to ${name}`;
   } catch(e) { return '✗ ' + e.message; }
 }
