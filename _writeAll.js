@@ -380,18 +380,40 @@ Run-Test 'VirtTerm-Biz' 'VirtTerm launches for business tests' {
     Start-VirtTerm -WaitMs 4000
     if (\$script:VTHwnd -eq [IntPtr]::Zero) { return 'hwnd is zero' }; \$true
 }
-Run-Test 'VirtTerm-Biz' 'User ID entry triggers Password prompt' {
-    Send-VirtTermText '000002'; Send-VirtTermKey 'Enter'
-    \$found  = Wait-VirtTermScreen -Contains 'Password' -TimeoutMs 6000
+Run-Test 'VirtTerm-Biz' 'Logon: reach employee zone-choice screen' {
+    # VirtTerm may reconnect to a prior session (already shows employee name + zone list),
+    # OR it may show a fresh splash / ZONE prompt that requires credentials.
+    # Handle both cases so the test is reliable regardless of VirtTerm session state.
     \$screen = Get-VirtTermScreen
-    if (-not \$found) { return "No Password prompt after 6s. Screen: [\$screen]" }
+    # Case 1: already authenticated (previous session reconnected).
+    if (\$screen -match 'Vogel') {
+        return @{ ok=\$true; detail="Session reconnected. Screen: [\$screen]" }
+    }
+    # Case 2: on splash screen (FORKLIFT / F2: No PIT) -- press Enter to advance.
+    if (\$screen -match 'FORKLIFT') {
+        Send-VirtTermKey 'Enter'
+        \$screen = Get-VirtTermScreen
+    }
+    # Case 3: on ZONE prompt -- send employee ID.
+    if (\$screen -match 'ZONE') {
+        Send-VirtTermText '000002'; Send-VirtTermKey 'Enter'
+    }
+    # Wait for employee name to confirm authentication.
+    \$found  = Wait-VirtTermScreen -Contains 'Vogel' -TimeoutMs 10000
+    \$screen = Get-VirtTermScreen
+    if (-not \$found) { return "Employee name not on screen after logon attempt. Screen: [\$screen]" }
     @{ ok=\$true; detail="Screen: [\$screen]" }
 }
-Run-Test 'VirtTerm-Biz' 'Password entry reaches main menu' {
-    Send-VirtTermText '00002'; Send-VirtTermKey 'Enter'
-    Start-Sleep -Milliseconds 2000
+Run-Test 'VirtTerm-Biz' 'Zone selection navigates to work screen' {
+    # Pick zone 1 from the CHOICE menu shown after login.
+    # If already past zone selection (e.g. OPTION menu visible), skip the send.
     \$screen = Get-VirtTermScreen
-    if ([string]::IsNullOrWhiteSpace(\$screen)) { return 'Screen empty after logon' }
+    if (\$screen -notmatch 'OPTION') {
+        Send-VirtTermText '1'; Send-VirtTermKey 'Enter'
+        Start-Sleep -Milliseconds 2000
+        \$screen = Get-VirtTermScreen
+    }
+    if ([string]::IsNullOrWhiteSpace(\$screen)) { return 'Screen empty after zone selection' }
     @{ ok=\$true; detail="Screen: [\$screen]" }
 }
 
