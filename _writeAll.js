@@ -41,6 +41,10 @@ function Run-Test([string]\$Suite, [string]\$Name, [scriptblock]\$Body) {
     try {
         \$result = & \$Body
         \$ms     = [int]((Get-Date) - \$start).TotalMilliseconds
+        # Capture VirtTerm window screenshot after the test body completes.
+        # Get-VirtTermSnapshot is defined in VirtTerm.ps1 (dot-sourced before tests run).
+        # Returns "" when VirtTerm is not running (API tests, etc.).
+        \$snap = try { Get-VirtTermSnapshot } catch { '' }
         # Body can return:
         #   \$true                          -> PASS, no detail
         #   @{ ok=\$true; detail='...' }   -> PASS with detail shown in report
@@ -49,21 +53,22 @@ function Run-Test([string]\$Suite, [string]\$Name, [scriptblock]\$Body) {
             \$detail = "\$(\$result.detail)"
             Write-Host "  [PASS] \$Name  (\$ms ms)  \$detail" -ForegroundColor Green
             \$script:PassCount++
-            \$script:Results.Add(@{ Suite=\$Suite; Name=\$Name; Status='PASS'; Ms=\$ms; Detail=\$detail })
+            \$script:Results.Add(@{ Suite=\$Suite; Name=\$Name; Status='PASS'; Ms=\$ms; Detail=\$detail; Screenshot=\$snap })
         } elseif (\$result -eq \$true) {
             Write-Host "  [PASS] \$Name  (\$ms ms)" -ForegroundColor Green
             \$script:PassCount++
-            \$script:Results.Add(@{ Suite=\$Suite; Name=\$Name; Status='PASS'; Ms=\$ms; Detail='' })
+            \$script:Results.Add(@{ Suite=\$Suite; Name=\$Name; Status='PASS'; Ms=\$ms; Detail=''; Screenshot=\$snap })
         } else {
             Write-Host "  [FAIL] \$Name  (\$ms ms) - \$result" -ForegroundColor Red
             \$script:FailCount++
-            \$script:Results.Add(@{ Suite=\$Suite; Name=\$Name; Status='FAIL'; Ms=\$ms; Detail="\$result" })
+            \$script:Results.Add(@{ Suite=\$Suite; Name=\$Name; Status='FAIL'; Ms=\$ms; Detail="\$result"; Screenshot=\$snap })
         }
     } catch {
-        \$ms = [int]((Get-Date) - \$start).TotalMilliseconds
+        \$ms   = [int]((Get-Date) - \$start).TotalMilliseconds
+        \$snap = try { Get-VirtTermSnapshot } catch { '' }
         Write-Host "  [ERROR] \$Name  (\$ms ms) - \$(\$_.Exception.Message)" -ForegroundColor Red
         \$script:ErrCount++
-        \$script:Results.Add(@{ Suite=\$Suite; Name=\$Name; Status='ERROR'; Ms=\$ms; Detail=\$_.Exception.Message })
+        \$script:Results.Add(@{ Suite=\$Suite; Name=\$Name; Status='ERROR'; Ms=\$ms; Detail=\$_.Exception.Message; Screenshot=\$snap })
     }
 }
 
@@ -163,6 +168,12 @@ const reportCss = `
   .bn   { background:#bae6fd; color:#0c4a6e; }
   .breg { background:#fca5a5; color:#7f1d1d; }
   .bfix { background:#6ee7b7; color:#064e3b; }
+  .snap { cursor:zoom-in; max-width:130px; display:block; border:1px solid #c4b5fd; border-radius:4px; transition:box-shadow .15s; }
+  .snap:hover { box-shadow:0 2px 12px #6d28d980; }
+  #snap-ol { display:none; position:fixed; inset:0; background:rgba(0,0,0,.88); z-index:9999;
+             align-items:center; justify-content:center; cursor:zoom-out; }
+  #snap-ol.open { display:flex; }
+  #snap-ol img  { max-width:95vw; max-height:95vh; border-radius:6px; box-shadow:0 8px 48px #000c; }
 `;
 
 function badgeHtml(status, baseline) {
@@ -209,7 +220,10 @@ if (\$fixes.Count -gt 0) {
     if     (\$_.Baseline -eq 'NEW')                                                          { \$bdg += " <span class='badge bn'>NEW</span>" }
     elseif (\$_.Baseline -eq 'PASS' -and \$_.Status -ne 'PASS')                             { \$bdg += " <span class='badge breg'>REGRESSION</span>" }
     elseif (\$_.Baseline -notin @('PASS','NEW') -and \$_.Status -eq 'PASS')                 { \$bdg += " <span class='badge bfix'>FIXED</span>" }
-    "<tr class='\$cls'><td>\$(\$_.Suite)</td><td>\$(\$_.Name)</td><td>\$bdg</td><td>\$(\$_.Ms) ms</td><td style='max-width:380px;word-break:break-word'>\$det</td></tr>"
+    \$snapCell = if (\$_.Screenshot) {
+        "<td><img class='snap' src='data:image/png;base64,\$(\$_.Screenshot)' onclick='showSnap(this.src)' title='Click to enlarge' /></td>"
+    } else { "<td style='color:#d1d5db;text-align:center;font-size:1.1rem'>&#8212;</td>" }
+    "<tr class='\$cls'><td>\$(\$_.Suite)</td><td>\$(\$_.Name)</td><td>\$bdg</td><td>\$(\$_.Ms) ms</td><td style='max-width:320px;word-break:break-word'>\$det</td>\$snapCell</tr>"
 }) -join "\`n"
 
 \$techHtml = ''
@@ -237,10 +251,15 @@ Total: <b>\$total</b></p>
 \$regHtml
 \$fixHtml
 <h2>Business Test Results (\$(\$bizRows.Count) tests)</h2>
-<table><tr><th>Suite</th><th>Test</th><th>Status</th><th>Time</th><th>Detail</th></tr>
+<table><tr><th>Suite</th><th>Test</th><th>Status</th><th>Time</th><th>Detail</th><th>Screen</th></tr>
 \$bizHtml
 </table>
 \$techHtml
+<div id='snap-ol' onclick='this.classList.remove("open")'><img id='snap-img' src='' /></div>
+<script>
+function showSnap(src){document.getElementById('snap-img').src=src;document.getElementById('snap-ol').classList.add('open');}
+document.addEventListener('keydown',function(e){if(e.key==='Escape')document.getElementById('snap-ol').classList.remove('open');});
+</script>
 </body></html>
 "@
 
@@ -556,6 +575,9 @@ using System;
 using System.Text;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.IO;
 
 public class WinApi {
     [DllImport("user32.dll")] public static extern bool   SetForegroundWindow(IntPtr hWnd);
@@ -644,8 +666,29 @@ public class WinApi {
         }, IntPtr.Zero);
         return result;
     }
+
+    // Screenshot capture using PrintWindow (works cross-process, window need not be foreground).
+    [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+    public static string CaptureWindowBase64(IntPtr hWnd) {
+        RECT rc;
+        if (!GetWindowRect(hWnd, out rc)) return "";
+        int w = rc.Right - rc.Left, h = rc.Bottom - rc.Top;
+        if (w <= 0 || h <= 0) return "";
+        using (var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb)) {
+            using (var g = Graphics.FromImage(bmp)) {
+                IntPtr hdc = g.GetHdc();
+                try { PrintWindow(hWnd, hdc, 0); } finally { g.ReleaseHdc(hdc); }
+            }
+            using (var ms = new MemoryStream()) {
+                bmp.Save(ms, ImageFormat.Png);
+                return Convert.ToBase64String(ms.ToArray());
+            }
+        }
+    }
 }
-"@ -ReferencedAssemblies 'System.Collections'
+"@ -ReferencedAssemblies 'System.Collections','System.Drawing'
 } # end if WinApi not already loaded
 
 # -- State ---------------------------------------------------------------------
@@ -710,6 +753,13 @@ function Get-VirtTermScreen {
         }
     }
     return ""
+}
+
+function Get-VirtTermSnapshot {
+    # Capture the VirtTerm window as a base64-encoded PNG.
+    # Returns empty string when VirtTerm is not running or the capture fails.
+    if (\$script:VTHwnd -eq [IntPtr]::Zero) { return "" }
+    try { return [WinApi]::CaptureWindowBase64(\$script:VTHwnd) } catch { return "" }
 }
 
 function Wait-VirtTermScreen {
