@@ -6,26 +6,95 @@
 
 ---
 
-## Ports
-| App | Port |
-|---|---|
-| EAR Explorer | 9000 |
-| EAR Tester | 9001 |
+## Repository Layout
 
-## Key Files
+| Repo | Path | Purpose |
+|---|---|---|
+| `ear-explorer` | `C:\Users\PVenkatesh\Downloads\ear-explorer` | Main repo — Node server + both UIs |
+| `ear-tester` | `C:\Users\PVenkatesh\Downloads\ear-tester` | Separate repo — PowerShell test runner |
+| VirtTerm | `C:\Users\PVenkatesh\Downloads\VirtualScanner\x86\VirtTerm.exe` | Advantage terminal emulator |
+
+### ear-explorer key files
 | File | Purpose |
 |---|---|
-| `server.js` | Express server for both apps (single process, two ports) |
-| `public/index.html` | EAR Explorer UI |
-| `public/tester.html` | EAR Tester UI |
-| `_vtree.ps1` | Win32 window tree enumerator for VirtTerm |
-| `CONTEXT.md` | This file — updated on every prompt, committed to GitHub |
+| `server.js` | Single Express process serving both ports 9000 and 9001 |
+| `public/index.html` | EAR Explorer UI (port 9000) |
+| `public/tester.html` | EAR Tester UI (port 9001) |
+| `CONTEXT.md` | This file — committed on every prompt |
+| `_vtree.ps1` | Win32 window tree enumerator — run to dump VirtTerm control IDs |
+| `register-task.ps1` | Task Scheduler auto-startup for server |
+| `Start-EARExplorer.ps1` | Manual startup script |
 
-## Servers & DB
-- `ArcadiaWHJSqlStage` (default) · `RetailRHjsqldev` · `RetailRHjsqlStage`
-- DB: `EAR` (mssql/msnodesqlv8, Windows auth, ODBC)
-- ADV schema also used: `ADV.dbo.t_device`, `ADV.dbo.t_menu`, `ADV.dbo.t_solution`
-- AAD schema: `AAD.dbo.t_menu` (used for dynamic menu BFS)
+### ear-tester key files
+| File | Purpose |
+|---|---|
+| `Run-Tests.ps1` | Entry point — params: `-BaseUrl`, `-Server`, `-App`, `-EntryPoint`, `-DeviceId`, `-VirtTerm` |
+| `tests/VirtTerm.ps1` | Win32 controller: launch/find/read/send for VirtTerm.exe |
+| `tests/virtterm-tests.ps1` | Test cases: Launch, Logon, Scan simulation, Screen wait, Teardown |
+| `_json_log.txt` | Written by Run-Tests.ps1 after each run; read by `/api/tests/results` |
+| `lib/` | Shared helpers dot-sourced by Run-Tests.ps1 |
+| `tools/` | Utility scripts |
+
+---
+
+## Ports & Servers
+
+| App | Port | URL |
+|---|---|---|
+| EAR Explorer | 9000 | http://localhost:9000 |
+| EAR Tester | 9001 | http://localhost:9001 |
+
+**DB servers (all SQL Server, Windows auth, ODBC):**
+- `ArcadiaWHJSqlStage` (default / demo)
+- `RetailRHjsqldev`
+- `RetailRHjsqlStage`
+
+**Schemas used:**
+- `EAR` — main application DB (all `t_app_*`, `t_act_*` tables)
+- `ADV.dbo.t_device`, `ADV.dbo.t_menu`, `ADV.dbo.t_solution`
+- `AAD.dbo.t_menu` — dynamic menu BFS
+
+---
+
+## API Endpoints (server.js)
+
+### EAR Explorer (port 9000)
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/search` | Search processes/actions. Params: `process`, `application`, `scope` (comma-joined type IDs), `server` |
+| GET | `/api/process/:id` | All steps for a process. Params: `application`, `server` |
+| GET | `/api/explorer/all-paths` | Reverse BFS from a process to all entry points. Params: `id`, `app`, `server` |
+| GET | `/api/action-paths` | Reverse BFS from an action object to entry points. Params: `type`, `id`, `app`, `server` |
+| GET | `/api/callers` | Direct callers of a process (one hop). Params: `id`, `server` |
+| GET | `/api/db-action/:id` | SQL statement + fields for a Database action |
+| GET | `/api/compare-action/:id` | Operands + operator for a Compare action |
+| GET | `/api/calc-action/:id` | Formula rows for a Calculate action |
+| GET | `/api/list-action/:id` | Operator + operands for a List action |
+| GET | `/api/dialog-action/:id` | Field/prompt/validation rows for a Dialog |
+| GET | `/api/dialog-screen/:id` | Screen format layout rows (for terminal grid mockup) |
+| GET | `/api/generic-action/:type/:id` | Unified metadata for types 7,10-14,16-19 |
+| GET | `/api/devices` | Device list from `ADV.dbo.t_device` — for Explorer env switcher |
+
+### EAR Tester (port 9001)
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/devices` | Same as above — populates entry-point dropdown (filtered to Virtual Terminal) |
+| GET | `/api/tester/dialogs` | BFS from entry point → reachable dialogs. Params: `server`, `entry`, `app` |
+| GET | `/api/tester/dynamic-menus` | Dynamic `_`-prefixed menus reachable from entry point. Params: `server`, `entry`, `app` |
+| POST | `/api/tests/run` | Spawns `Run-Tests.ps1`. Params: `app`, `proc`, `entry` |
+| GET | `/api/tests/status` | Returns `{ running: true/false }` |
+| GET | `/api/tests/results` | Reads `ear-tester/_json_log.txt` → test result JSON |
+| POST | `/api/launch-virtterm` | Spawns `VirtTerm.exe` detached |
+
+### Graph cache (shared)
+- `getGraph(server, app)` — builds and caches the full call graph for 15 min
+- Returns `{ adjacency: Map<procId → [{childId, childName}]>, nameOf: Map<id→name>, dialogIds: Set }`
+- Q1 = all process→process edges from `t_app_process_object_detail` (type=1)
+- Q2 = dialog IDs from `t_act_dialog`
+- Q3 = DB actions whose SQL contains `t_menu` (dynamic menu callers)
+- Q4 = `t_menu` item texts for those callers
+- Dynamic `_`-prefixed menu nodes injected as virtual BFS nodes (`MENU:_Name`)
+- First load ~1.6 s; subsequent calls <10 ms
 
 ---
 
@@ -148,16 +217,16 @@ Every detail panel (Calculate, Compare, Database, Dialog, List, Execute, etc.) n
 
 ```
 VirtTerm.exe  (PID varies)
-+-- [H] #32770  "Virtual Terminal Configuration"
++-- [H] #32770  "Virtual Terminal Configuration"   ← HIDDEN config dialog
 |       +-- [H] Edit [ID=1000]  ← Host Server Name  (e.g. "172.26.161.132")
 |       +-- [H] Edit [ID=1001]  ← Host Port Number  (e.g. "4400")
 |       +-- [H] Edit [ID=1002]  ← Device Name       (e.g. "WAVTUAT10")
 |       +-- [H] Button [ID=1]   "&OK"
 |       +-- [H] Button [ID=2]   "&Cancel"
 |       +-- [H] Static x3       "Host Server Name:" / "Host Port Number:" / "Device Name:"
-+-- [V] ADV_Virtual_Terminal  "Advantage Virtual Terminal"
-|       L__ [V] ScrnClass  "Advantage Virtual Terminal"
-|               +-- [H] Edit  "ConsoleEcho"   ← FULL SCREEN TEXT (all rows, hidden)
++-- [V] ADV_Virtual_Terminal  "Advantage Virtual Terminal"   ← MAIN visible window
+|       L__ [V] ScrnClass  "Advantage Virtual Terminal"      ← custom-painted terminal
+|               +-- [H] Edit  "ConsoleEcho"   ← FULL SCREEN TEXT (HIDDEN — do NOT skip)
 |               +-- [V] Button [ID=903-914]   F1 … F12
 |               L__ [H] ScrollBar [ID=924]
 +-- [H] MSCTFIME UI
@@ -165,16 +234,91 @@ L__ [H] IME  "Default IME"
 ```
 
 ### Key facts
-- **All screen text** lives in the single hidden `Edit "ConsoleEcho"` control.
-  Read via `WM_GETTEXT` (buffer 4096 chars). `ScrnClass` custom-paints it.
-- **Config dialog** (`#32770`) is Hidden — VirtTerm connects on startup using
-  whatever is in the Edit fields. To switch server: show dialog, set [ID=1000/1001/1002],
-  click OK [ID=1].
-- **To send keystrokes**: `WM_CHAR` / `PostMessage` to `ScrnClass` or `ConsoleEcho`.
-- **`_vtree.ps1`**: PowerShell script in repo root that enumerates the full window
-  tree with control IDs, visibility, and Edit content.
+- **All screen text** lives in the single **hidden** `Edit "ConsoleEcho"` control (child of ScrnClass).
+  Read via `GetWindowText` (= `WM_GETTEXT`). Buffer 4096 chars covers all 24 rows × 80 cols.
+  `ScrnClass` custom-paints it — the Edit content is the authoritative source.
+- **Config dialog** (`#32770`) is Hidden — VirtTerm connects on startup using stored settings.
+  To switch server: `ShowWindow(hwnd, SW_SHOW)` → set [ID=1000] host, [ID=1001] port, [ID=1002] device → `PostMessage` click OK [ID=1].
+- **To send keystrokes**: `SendKeys::SendWait` works (brings window to foreground first).
+  Alternatively `PostMessage(ScrnClass, WM_CHAR, ...)` for background sending.
+- **`_vtree.ps1`**: PowerShell script in repo root — run it while VirtTerm is open to re-dump the full control tree with IDs, visibility flags, and Edit content.
+
+### ⚠️ Known bugs in `tests/VirtTerm.ps1`
+
+**Bug 1 — `Get-VirtTermScreen` never reads screen content (CRITICAL)**
+```powershell
+# BROKEN: skips hidden children → misses ConsoleEcho
+foreach ($child in [WinApi]::GetChildWindows($script:VTHwnd)) {
+    if (-not [WinApi]::IsWindowVisible($child)) { continue }   # ← ConsoleEcho is hidden!
+```
+ConsoleEcho is hidden by design. The current code skips it, returns only button captions.
+`Wait-VirtTermScreen -Contains 'Password'` therefore always times out.
+
+**Fix needed:** Walk the full subtree recursively, skip the `IsWindowVisible` guard, find the
+`Edit` control whose text matches screen-format content (starts with spaces / has Advantage layout).
+Or search by class `Edit` + window title `ConsoleEcho` specifically.
+
+**Bug 2 — `Get-VirtTermHwnd` fallback has PowerShell scope bug**
+```powershell
+$hwnd = [IntPtr]::Zero
+[WinApi]::EnumWindows([WinApi+EnumChildProc]{
+    param($h, $_)
+    if ($info.Id -eq $pid) { $hwnd = $h; return $false }   # ← $hwnd is not outer $hwnd
+    ...
+```
+Inside the delegate, `$hwnd = $h` creates a local variable, not the outer one.
+If `MainWindowHandle` is zero (happens while config dialog is active), the fallback returns Zero.
+
+**Fix needed:** Use `[ref]` or a `[System.Collections.Generic.List[IntPtr]]` to capture the handle
+across the delegate boundary, or use a simpler approach: `Get-Process VirtTerm | .MainWindowHandle`
+after the config dialog closes.
+
+**Bug 3 — `Send-VirtTermKey` param block is garbled in the file**
+The `-Key` parameter `[ValidateSet(...)]` attribute is corrupted / wrapped mid-line in the file.
+This may cause a parse error when the script is dot-sourced.
+Needs to be verified and rewritten cleanly.
 
 ---
+
+---
+
+## EAR Explorer Features — Complete List
+
+### Search
+- **All 16 action types** searchable via checkbox dropdown: Process(1), Calc(3), Compare(4), DB(5), Dialog(6), Execute(7), List(9), Publish(10), Receive(11), Report(12), Send(13), User(14), Locale(16), Field(17), Constant(18), Record(19)
+- **Database** search looks inside the SQL statement text (not just action name) — shows amber **🔍 matched in SQL** badge when action name itself doesn't match
+- Results deduplicated via DISTINCT; ordered by action_name
+
+### Search Result Click
+- Clicking any result opens the **parent process**, expands the containing group, scrolls to the matching row, and **flashes it purple** (1.6 s animation)
+- **For non-Process types**: automatically triggers the detail panel (no second click needed)
+- Sub-line shows **⚙️ in: ParentProcessName** for action results
+
+### Process Detail View
+- Steps grouped by action type (header rows with toggle expand/collapse)
+- **Right-click any row** → context menu with:
+  - 📋 Copy path to here (breadcrumb)
+  - 🗺 Copy all entry-point paths (reverse BFS, roots only)
+- Process-type rows (type=1): click name cell → drill into subprocess
+- All other types: click row → detail panel on right
+
+### Detail Panels
+- **Database (5)**: SQL statement in monospace box, field list
+- **Compare (4)**: operand1 operator operand2 expression
+- **Calculate (3)**: formula rows (target ← source/constant)
+- **List (9)**: operands and operator
+- **Dialog (6)**: field/prompt/validation rows + terminal screen mockup
+- **Generic (7,10-14,16-19)**: name + description
+- **Search term highlighted in yellow** (`<mark class="search-hl">`) across ALL detail panels
+
+### "Who calls this?" (Reverse BFS)
+- Group header has 📋 button → copies all entry-point paths for that process
+- Right-click also gives 🗺 Copy all entry-point paths
+- Paths table: shows all ancestors; roots marked with green "entry" badge
+- **Only root nodes** emitted by `/api/action-paths` (fixed the 39,000-line explosion)
+
+### Clipboard
+- `writeToClipboard(text)` — tries `navigator.clipboard` first, falls back to `textarea + execCommand('copy')` for HTTP/IP-based deployments (no HTTPS required)
 
 ---
 
@@ -197,24 +341,75 @@ Clicking a Calculate/Compare/Field (etc.) search result opened the parent proces
 ### Fix 3 — Search dropdown duplicates
 Previous edit left duplicate entries (Execute, List, Receive, Send, User appeared twice). Fixed in de9e31f.
 
+## EAR Tester Features — Current State
+
+### What works
+- **Reachable Dialogs panel**: BFS from selected entry point → all reachable dialogs + every call path
+  - Hover tooltip shows all paths with color coding (green=outbound, orange=inbound, blue=ECom, grey=transfer)
+  - Right-click → 📋 Copy all paths
+- **Test results table**: reads `_json_log.txt`, shows PASS/FAIL/ERR with timing and detail
+- **▶ Run Tests button**: POSTs to `/api/tests/run` → spawns `Run-Tests.ps1` via PowerShell
+- **⟳ Refresh**: re-reads log file; polls `/api/tests/status` every 2.5 s while running
+- **🖥 VirtTerm button**: launches `VirtTerm.exe` detached via `/api/launch-virtterm`
+- **Server switcher**: ArcadiaWHJSqlStage / RetailRHjsqldev / RetailRHjsqlStage
+- **Entry-point dropdown**: loads Virtual Terminal devices from `ADV.dbo.t_device`
+
+### What is broken / not yet working
+1. **`Get-VirtTermScreen` returns empty** → see Bug 1 above → logon test always times out
+2. **`Get-VirtTermHwnd` fallback broken** → see Bug 2 above → window not found if config dialog is active
+3. **`Send-VirtTermKey` param block may be garbled** → see Bug 3 above → dot-source may fail
+4. **No automated logon test passing** — the full sequence (launch → wait for login screen → type user/pass → wait for menu) has never successfully completed because screen reads return nothing
+
+### Run-Tests.ps1 test sequence (intended)
+```
+Suite: VirtTerm
+1. Launch VirtTerm (or find existing)
+2. Wait for login prompt (screen contains "User ID" or "Login")
+3. Type username + Enter
+4. Wait for "Password" prompt
+5. Type password + Enter
+6. Wait for main menu screen
+7. [Future] Navigate to specific dialog and verify screen content
+8. Teardown (close VirtTerm or send disconnect)
+```
+
+### _json_log.txt format
+```json
+{
+  "runAt": "2026-04-13T10:00:00Z",
+  "baseUrl": "http://localhost:9001",
+  "passed": 2, "failed": 1, "errors": 0, "total": 3,
+  "results": [
+    { "suite": "VirtTerm", "name": "Launch VirtTerm", "status": "PASS", "ms": 1240, "detail": "" },
+    { "suite": "VirtTerm", "name": "Wait for Login", "status": "FAIL", "ms": 30000, "detail": "Timed out waiting for 'User ID'" }
+  ]
+}
+```
+
+---
+
 ## Pending / Next Steps
 
-### VirtTerm Screen Recorder (NOT YET BUILT)
+### VirtTerm / Tester (HIGHEST PRIORITY — no tests pass yet)
+1. **Fix `Get-VirtTermScreen`** — walk child tree recursively, do NOT skip hidden windows, find `ConsoleEcho` Edit by name or class, read via `GetWindowText`. This is the root cause of all logon test failures.
+2. **Fix `Get-VirtTermHwnd` scope bug** — `$hwnd = $h` inside an `EnumWindows` delegate is a local assignment. Use a `[System.Collections.Generic.List[IntPtr]]` or `[ref]` to capture across boundary.
+3. **Fix `Send-VirtTermKey`** — the `[ValidateSet(...)]` attribute block appears garbled/corrupted. Verify the file parses cleanly after dot-sourcing.
+4. **End-to-end logon test** — full sequence: launch → wait for "User ID" → send credentials → wait for main menu → verify screen content.
+5. **Automated VirtTerm config** — show hidden `#32770` dialog → set ID=1000 (host), ID=1001 (port), ID=1002 (device) → click OK (ID=1) — so tests can connect to any environment without manual setup.
+
+### EAR Explorer (nice to have)
+- Paths table: filter option to show only entry-point rows (hide intermediate ancestors)
+- Persist server/app selection across page refresh via `localStorage`
+
+### VirtTerm Screen Recorder (NOT YET BUILT — proposed design)
 As you navigate VirtTerm screens, record the full `ConsoleEcho` text at each step
 so future runs can validate against it.
-
-**Proposed design:**
 - `POST /api/vt/screen` — reads ConsoleEcho via inline PowerShell + Win32, returns `{screen}`
 - `POST /api/vt/recording` — saves `{name, steps:[{label, screen}]}` → `recordings/{name}.json`
 - `GET  /api/vt/recording/:name` — loads a recording
-- `GET  /api/vt/recordings` — lists saved recordings
 - **Tester UI**: "🔴 Record" button → label input + "📸 Capture" + "⏹ Stop"
 - **Compare mode**: load recording → navigate → auto-diff actual vs expected per step
 
 ### Dynamic Menu Downstream Links
 `t_menu.text` items may link to real process objects via another table (`t_task`?).
-Confirm the table and we can extend the BFS to show full paths through menu items.
-
-### Automated VirtTerm Connection
-Use Win32 control IDs discovered in `_vtree.ps1` to auto-configure VirtTerm on launch:
-show hidden `#32770` dialog → set ID=1000 (host), ID=1001 (port), ID=1002 (device) → click OK (ID=1).
+Confirm the table and extend BFS to show full paths through menu items.
