@@ -134,6 +134,7 @@
   tr.compare-clickable td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
   tr.dialog-clickable  td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
   tr.generic-clickable td.action-name { color: #000000; text-decoration: underline dotted; cursor: pointer; font-weight: 700; }
+  mark.search-hl { background: #fef08a; color: #000; border-radius: 2px; padding: 0 2px; font-style: normal; }
   @keyframes searchFlash {
     0%   { outline: 3px solid #7c3aed; background: #ede9fe; }
     50%  { outline: 3px solid #7c3aed; background: #c4b5fd; }
@@ -458,6 +459,10 @@ async function openProcess(processId, processName, pushToStack, targetActionName
       });
       if (firstMatch) {
         firstMatch.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Auto-open the detail panel for the matched row (skip for Process rows — those drill into a subprocess)
+        if (!firstMatch.classList.contains('drillable')) {
+          setTimeout(() => firstMatch.click(), 300); // slight delay so scroll settles first
+        }
       }
     }
   } catch(e) {
@@ -483,10 +488,14 @@ function renderProcessList() {
     const bg         = matchColor(p.match_type);
     const isProcess  = p.match_type === '1';
     const primaryTxt = esc(p.action_name || p.name);
+    const searchTerm = document.getElementById('inp-process').value.trim().toLowerCase();
+    // For DB actions: if the action name doesn't contain the search term, the match was in the SQL body
+    const sqlMatch   = p.match_type === '5' && searchTerm &&
+                       !(p.action_name || '').toLowerCase().includes(searchTerm);
     // For action-type results show the parent process name as sub-line; for process results show description
     const subLine    = isProcess
       ? (p.description ? `<div class="proc-list-desc">${esc(p.description)}</div>` : '')
-      : `<div class="proc-list-desc">📋 ${esc(p.name)}</div>`;
+      : `<div class="proc-list-desc">⚙️ in: ${esc(p.name)}${sqlMatch ? ' &nbsp;<span style="font-size:0.75rem;background:#fef9c3;color:#92400e;border-radius:3px;padding:1px 5px">🔍 matched in SQL</span>' : ''}</div>`;
     return `
     <div class="proc-list-item" data-id="${esc(p.id)}"
          style="background:${bg}; border-left-color:${bg};">
@@ -991,6 +1000,7 @@ async function showDialogDetail(r, tr) {
   }
 
   document.getElementById('detail-content').appendChild(extra);
+  applySearchHighlight(document.getElementById('detail-content'));
 }
 
 // Switch screen format tabs
@@ -1038,6 +1048,7 @@ async function showCompareDetail(r, tr) {
     document.getElementById('detail-content').innerHTML =
       row('Description', d.description) +
       `<div style="margin-top:10px;padding:10px 14px;background:linear-gradient(90deg,#ede9fe,#dbeafe);border-radius:8px;font-family:monospace;color:#000000;font-size:0.9rem;font-weight:600;border:1.5px solid #a78bfa;box-shadow:0 2px 8px rgba(124,58,237,0.12)">${expr} ?</div>`;
+    applySearchHighlight(document.getElementById('detail-content'));
   } catch(e) {
     document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
   }
@@ -1100,6 +1111,7 @@ async function showCalcDetail(r, tr) {
     });
     html += '</tbody></table>';
     document.getElementById('detail-content').innerHTML = html;
+    applySearchHighlight(document.getElementById('detail-content'));
   } catch(e) {
     document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
   }
@@ -1133,6 +1145,35 @@ function toggleGroup(groupKey, headerRow) {
   icon.textContent = isExpanded ? '▶' : '▼';
 }
 
+// Highlight the current search term inside a detail panel container
+function applySearchHighlight(container) {
+  const term = document.getElementById('inp-process').value.trim();
+  if (!term) return;
+  const needle = term.toLowerCase();
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+  const nodes  = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  nodes.forEach(node => {
+    const text  = node.textContent;
+    const lower = text.toLowerCase();
+    if (!lower.includes(needle)) return;
+    const parts = [];
+    let last = 0, idx;
+    while ((idx = lower.indexOf(needle, last)) !== -1) {
+      if (idx > last) parts.push(document.createTextNode(text.slice(last, idx)));
+      const mark = document.createElement('mark');
+      mark.className   = 'search-hl';
+      mark.textContent = text.slice(idx, idx + needle.length);
+      parts.push(mark);
+      last = idx + needle.length;
+    }
+    if (last < text.length) parts.push(document.createTextNode(text.slice(last)));
+    const parent = node.parentNode;
+    parts.forEach(p => parent.insertBefore(p, node));
+    parent.removeChild(node);
+  });
+}
+
 async function showDbDetail(r, tr) {
   document.querySelectorAll('tbody tr.selected').forEach(el => el.classList.remove('selected'));
   tr.classList.add('selected');
@@ -1155,6 +1196,7 @@ async function showDbDetail(r, tr) {
       <hr style="border-color:#d0d7e8;margin:10px 0"/>
     `).join('');
     document.getElementById('detail-content').innerHTML = html;
+    applySearchHighlight(document.getElementById('detail-content'));
   } catch(e) {
     document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
   }
@@ -1189,6 +1231,7 @@ async function showListDetail(r, tr) {
       (op1 ? `<div class="detail-row"><span class="detail-label">Operand 1</span><span class="detail-val">${op1}</span></div>` : '') +
       (op2 ? `<div class="detail-row"><span class="detail-label">Operand 2</span><span class="detail-val">${op2}</span></div>` : '') +
       (d.operator_name === 'Find' ? row('Find Exact', d.find_exact ? 'Yes' : 'No') : '');
+    applySearchHighlight(document.getElementById('detail-content'));
   } catch(e) {
     document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
   }
@@ -1225,6 +1268,7 @@ async function showGenericDetail(r, tr) {
       row('Name',        d.name || r.action_name) +
       row('Description', d.description) +
       extra;
+    applySearchHighlight(document.getElementById('detail-content'));
   } catch(e) {
     document.getElementById('detail-content').innerHTML = `<p style="color:#f38ba8">Error: ${e.message}</p>`;
   }
