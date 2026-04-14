@@ -168,7 +168,7 @@ const reportCss = `
   .bn   { background:#bae6fd; color:#0c4a6e; }
   .breg { background:#fca5a5; color:#7f1d1d; }
   .bfix { background:#6ee7b7; color:#064e3b; }
-  .snap { cursor:zoom-in; max-width:130px; display:block; border:1px solid #c4b5fd; border-radius:4px; transition:box-shadow .15s; }
+  .snap { cursor:zoom-in; max-width:80px; display:block; border:1px solid #c4b5fd; border-radius:4px; transition:box-shadow .15s; }
   .snap:hover { box-shadow:0 2px 12px #6d28d980; }
   #snap-ol { display:none; position:fixed; inset:0; background:rgba(0,0,0,.88); z-index:9999;
              align-items:center; justify-content:center; cursor:zoom-out; }
@@ -687,6 +687,34 @@ public class WinApi {
             }
         }
     }
+
+    // CaptureRegionBase64: BitBlt from the desktop DC at the window's screen coordinates.
+    // Works for child windows (ScrnClass) where PrintWindow gives a blank result.
+    // Requires the window to be visible on screen (VirtTerm is SW_RESTOREd before tests run).
+    [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern int    ReleaseDC(IntPtr hWnd, IntPtr hDC);
+    [DllImport("gdi32.dll")]  public static extern bool   BitBlt(IntPtr hdcDst, int xDst, int yDst, int w, int h, IntPtr hdcSrc, int xSrc, int ySrc, uint rop);
+    public static string CaptureRegionBase64(IntPtr hWnd) {
+        RECT rc;
+        if (!GetWindowRect(hWnd, out rc)) return "";
+        int w = rc.Right - rc.Left, h = rc.Bottom - rc.Top;
+        if (w <= 0 || h <= 0) return "";
+        IntPtr screenDC = GetDC(IntPtr.Zero);
+        if (screenDC == IntPtr.Zero) return "";
+        try {
+            using (var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb)) {
+                using (var g = Graphics.FromImage(bmp)) {
+                    IntPtr memDC = g.GetHdc();
+                    try { BitBlt(memDC, 0, 0, w, h, screenDC, rc.Left, rc.Top, 0x00CC0020); }
+                    finally { g.ReleaseHdc(memDC); }
+                }
+                using (var ms = new MemoryStream()) {
+                    bmp.Save(ms, ImageFormat.Png);
+                    return Convert.ToBase64String(ms.ToArray());
+                }
+            }
+        } finally { ReleaseDC(IntPtr.Zero, screenDC); }
+    }
 }
 "@ -ReferencedAssemblies 'System.Collections','System.Drawing'
 } # end if WinApi not already loaded
@@ -756,10 +784,19 @@ function Get-VirtTermScreen {
 }
 
 function Get-VirtTermSnapshot {
-    # Capture the VirtTerm window as a base64-encoded PNG.
-    # Returns empty string when VirtTerm is not running or the capture fails.
+    # Capture only the ScrnClass terminal panel (the blue screen area) as a base64 PNG.
+    # Uses BitBlt from the desktop DC at ScrnClass screen coordinates -- works for child
+    # windows where PrintWindow returns a blank. VirtTerm must be visible (SW_RESTOREd).
     if (\$script:VTHwnd -eq [IntPtr]::Zero) { return "" }
-    try { return [WinApi]::CaptureWindowBase64(\$script:VTHwnd) } catch { return "" }
+    try {
+        # Walk direct children to find the ScrnClass panel hwnd.
+        \$scrnHwnd = [IntPtr]::Zero
+        foreach (\$child in [WinApi]::GetChildWindows(\$script:VTHwnd)) {
+            if ([WinApi]::GetClass(\$child) -eq 'ScrnClass') { \$scrnHwnd = \$child; break }
+        }
+        \$target = if (\$scrnHwnd -ne [IntPtr]::Zero) { \$scrnHwnd } else { \$script:VTHwnd }
+        return [WinApi]::CaptureRegionBase64(\$target)
+    } catch { return "" }
 }
 
 function Wait-VirtTermScreen {
