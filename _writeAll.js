@@ -688,32 +688,37 @@ public class WinApi {
         }
     }
 
-    // CaptureRegionBase64: BitBlt from the desktop DC at the window's screen coordinates.
-    // Works for child windows (ScrnClass) where PrintWindow gives a blank result.
-    // Requires the window to be visible on screen (VirtTerm is SW_RESTOREd before tests run).
-    [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern int    ReleaseDC(IntPtr hWnd, IntPtr hDC);
-    [DllImport("gdi32.dll")]  public static extern bool   BitBlt(IntPtr hdcDst, int xDst, int yDst, int w, int h, IntPtr hdcSrc, int xSrc, int ySrc, uint rop);
-    public static string CaptureRegionBase64(IntPtr hWnd) {
-        RECT rc;
-        if (!GetWindowRect(hWnd, out rc)) return "";
-        int w = rc.Right - rc.Left, h = rc.Bottom - rc.Top;
-        if (w <= 0 || h <= 0) return "";
-        IntPtr screenDC = GetDC(IntPtr.Zero);
-        if (screenDC == IntPtr.Zero) return "";
-        try {
-            using (var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb)) {
-                using (var g = Graphics.FromImage(bmp)) {
-                    IntPtr memDC = g.GetHdc();
-                    try { BitBlt(memDC, 0, 0, w, h, screenDC, rc.Left, rc.Top, 0x00CC0020); }
-                    finally { g.ReleaseHdc(memDC); }
-                }
-                using (var ms = new MemoryStream()) {
-                    bmp.Save(ms, ImageFormat.Png);
-                    return Convert.ToBase64String(ms.ToArray());
-                }
+    // CaptureScrnClassBase64: PrintWindow on the top-level VirtTerm window (reliable, no
+    // foreground focus needed), then crop the bitmap to the ScrnClass child's region.
+    // ScrnClass position is computed from the difference of the two GetWindowRect results.
+    public static string CaptureScrnClassBase64(IntPtr mainHwnd, IntPtr scrnHwnd) {
+        RECT mrc, src;
+        if (!GetWindowRect(mainHwnd, out mrc)) return "";
+        if (!GetWindowRect(scrnHwnd, out src))  return "";
+        int mw = mrc.Right - mrc.Left, mh = mrc.Bottom - mrc.Top;
+        if (mw <= 0 || mh <= 0) return "";
+        // Capture the whole VirtTerm window via PrintWindow (works cross-process / not-foreground).
+        using (var full = new Bitmap(mw, mh, PixelFormat.Format32bppArgb)) {
+            using (var g = Graphics.FromImage(full)) {
+                IntPtr hdc = g.GetHdc();
+                try { PrintWindow(mainHwnd, hdc, 0); } finally { g.ReleaseHdc(hdc); }
             }
-        } finally { ReleaseDC(IntPtr.Zero, screenDC); }
+            // Compute ScrnClass offset relative to the main window's top-left.
+            int x = src.Left - mrc.Left, y = src.Top - mrc.Top;
+            int w = src.Right - src.Left, h = src.Bottom - src.Top;
+            // Clamp to stay inside the captured bitmap.
+            if (x < 0) { w += x; x = 0; }
+            if (y < 0) { h += y; y = 0; }
+            if (w <= 0 || h <= 0 || x >= mw || y >= mh) return "";
+            if (x + w > mw) w = mw - x;
+            if (y + h > mh) h = mh - y;
+            var region = new Rectangle(x, y, w, h);
+            using (var crop = full.Clone(region, full.PixelFormat))
+            using (var ms = new MemoryStream()) {
+                crop.Save(ms, ImageFormat.Png);
+                return Convert.ToBase64String(ms.ToArray());
+            }
+        }
     }
 }
 "@ -ReferencedAssemblies 'System.Collections','System.Drawing'
@@ -784,18 +789,19 @@ function Get-VirtTermScreen {
 }
 
 function Get-VirtTermSnapshot {
-    # Capture only the ScrnClass terminal panel (the blue screen area) as a base64 PNG.
-    # Uses BitBlt from the desktop DC at ScrnClass screen coordinates -- works for child
-    # windows where PrintWindow returns a blank. VirtTerm must be visible (SW_RESTOREd).
+    # Capture the ScrnClass terminal panel (blue screen area) as a base64 PNG.
+    # Strategy: PrintWindow on the top-level VirtTerm hwnd (works without needing it
+    # in the foreground), then crop to the ScrnClass child window region.
+    # This avoids the BitBlt-from-screen bug where whatever was on top (e.g. VS Code)
+    # was captured instead of VirtTerm.
     if (\$script:VTHwnd -eq [IntPtr]::Zero) { return "" }
     try {
-        # Walk direct children to find the ScrnClass panel hwnd.
         \$scrnHwnd = [IntPtr]::Zero
         foreach (\$child in [WinApi]::GetChildWindows(\$script:VTHwnd)) {
             if ([WinApi]::GetClass(\$child) -eq 'ScrnClass') { \$scrnHwnd = \$child; break }
         }
-        \$target = if (\$scrnHwnd -ne [IntPtr]::Zero) { \$scrnHwnd } else { \$script:VTHwnd }
-        return [WinApi]::CaptureRegionBase64(\$target)
+        if (\$scrnHwnd -eq [IntPtr]::Zero) { return "" }
+        return [WinApi]::CaptureScrnClassBase64(\$script:VTHwnd, \$scrnHwnd)
     } catch { return "" }
 }
 
