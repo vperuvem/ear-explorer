@@ -30,6 +30,16 @@ param(
 \$script:ProcessId     = \$null
 \$script:ProcessRows   = \$null
 
+# Virtual Terminal device registry profiles, keyed by app name (WA / MA / YA).
+# Each profile tells VirtTerm which server+port to connect to.
+# Registry path: HKCU:\\Software\\HighJump Software\\Advantage Virtual Terminal\\<DeviceName>
+# WA is confirmed. Run Get-VirtTermDevices (below) to discover MA / YA entries.
+\$script:VTDeviceMap = @{
+    WA = @{ DeviceName='WAVTUAT10'; IP='172.26.161.132'; Port=4400 }
+    MA = @{ DeviceName='';          IP='';                Port=0    }  # TODO: fill in
+    YA = @{ DeviceName='';          IP='';                Port=0    }  # TODO: fill in
+}
+
 function Invoke-Api([string]\$Path) {
     \$sep = if (\$Path -match '\\?') { '&' } else { '?' }
     \$url = "\$script:BaseUrl\$Path\${sep}server=\$script:Server"
@@ -396,11 +406,56 @@ Run-Test 'EAR' 'Calc action has operator symbol' {
 }
 
 Section "VirtTerm Logon (Business)"
-Run-Test 'VirtTerm-Biz' 'VirtTerm launches for business tests' {
-    Start-VirtTerm -WaitMs 4000
-    if (\$script:VTHwnd -eq [IntPtr]::Zero) { return 'hwnd is zero' }
+Run-Test 'VirtTerm-Biz' 'VirtTerm connects to WMS for business tests' {
+    # Strategy:
+    # 1. If VirtTerm is already running with live WMS screen data -> reuse it.
+    # 2. If not running (or stuck at device selection splash) -> launch fresh,
+    #    configure registry for the target app, then wait up to 2 minutes for the
+    #    user to click on the device in the VirtTerm device-selection screen.
+    #    (VirtTerm requires a real hardware click to initiate the WMS connection.)
+    # 3. Once ConsoleEcho contains real WMS data, proceed.
+
+    # -- Step 1: Check existing VirtTerm session ---------------------------------
+    \$existing = Get-Process -Name 'VirtTerm' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (\$existing) {
+        \$script:VTProcess = \$existing
+        \$script:VTHwnd   = Get-VirtTermHwnd
+        \$s = Get-VirtTermScreen
+        if (\$s -and \$s -ne 'ConsoleEcho') {
+            return @{ ok=\$true; detail="Reused running VirtTerm session. Screen: [\$s]" }
+        }
+        # VirtTerm is running but stuck at device selection (ConsoleEcho == default).
+        # Bring it to the foreground so the user can click the device.
+        [WinApi]::ShowWindow(\$script:VTHwnd, 9) | Out-Null
+        [WinApi]::SetForegroundWindow(\$script:VTHwnd) | Out-Null
+        Write-Host "  VirtTerm running but not connected. Waiting for user to click device..." -ForegroundColor Yellow
+    } else {
+        # -- Step 2: Launch VirtTerm (keep DisplayMenuOptions=1 for device list) ---
+        # Set-VirtTermDevice writes correct IP/Port/DeviceName for the target app.
+        # DisplayMenuOptions=1 shows the device-selection list in VirtTerm's window.
+        # The user must click on the device name once to initiate the WMS connection.
+        Set-VirtTermDevice   # writes correct device registry profile (DisplayMenuOptions=1)
+        Start-VirtTerm -WaitMs 5000
+        if (\$script:VTHwnd -eq [IntPtr]::Zero) { return 'VirtTerm window not found after launch' }
+        Write-Host "  VirtTerm launched. Waiting for user to click device in the selection list..." -ForegroundColor Yellow
+    }
+
+    # -- Step 3: Poll for WMS screen data (up to 120s) ---------------------------
+    # The user clicks on the device (e.g., WAVTUAT10) in the blue VirtTerm window.
+    # VirtTerm then establishes TCP connection and WMS starts sending screen data.
+    # ConsoleEcho changes from "ConsoleEcho" (VB6 default) to actual WMS content.
+    \$ready = \$false
+    for (\$i = 0; \$i -lt 60; \$i++) {
+        \$s = Get-VirtTermScreen
+        if (\$s -and \$s -ne 'ConsoleEcho') { \$ready = \$true; break }
+        if (\$i % 10 -eq 9) { Write-Host "  Still waiting... (\$(\$i+1)s)" -ForegroundColor DarkGray }
+        Start-Sleep -Milliseconds 2000
+    }
     \$screen = Get-VirtTermScreen
-    @{ ok=\$true; detail="Screen: [\$screen]" }
+    if (-not \$ready) {
+        return "WMS screen not received after 120s. Please launch VirtTerm.exe and click on the device (e.g. WAVTUAT10). Screen: [\$screen]"
+    }
+    @{ ok=\$true; detail="Connected. Screen: [\$screen]" }
 }
 Run-Test 'VirtTerm-Biz' 'Logoff: navigate to a clean menu state' {
     # Success = ZONE login prompt, CHOICE (zone selection), or main OPTION (employee name visible).
@@ -416,14 +471,22 @@ Run-Test 'VirtTerm-Biz' 'Logoff: navigate to a clean menu state' {
     if (& \$atClean -or \$screen -match 'FORKLIFT') {
         return @{ ok=\$true; detail="Already at clean state. Screen: [\$screen]" }
     }
-    # Attempt smart unwind using F1:Cancel (task cancel), Enter (acknowledge), and F3 (back).
-    for (\$i = 0; \$i -lt 30; \$i++) {
+    # Smart unwind: F1:Cancel (labeled) > F1 try (inside work task) > Escape (OPTION menu) > F3.
+    # WMS uses F1 as the cancel key for active work tasks (ITEM ID / LOCATION prompts).
+    # From the top-level OPTION (work-type) menu, ESC triggers the sign-off flow.
+    for (\$i = 0; \$i -lt 40; \$i++) {
         if (& \$atClean) { break }
         \$screen = Get-VirtTermScreen
         if (\$screen -match 'F1.*Cancel') {
             Send-VirtTermKey 'F1'; Start-Sleep -Milliseconds 1500
-        } elseif (\$screen -match 'ENTER.*Continue') {
+        } elseif (\$screen -match 'ENTER.*Continue|press ENTER') {
             Send-VirtTermKey 'Enter'; Start-Sleep -Milliseconds 1200
+        } elseif (\$screen -match 'ITEM.?ID|LOCATION|SCAN') {
+            # Inside an active work task -- try F1 (unlabeled cancel) to back out
+            Send-VirtTermKey 'F1'; Start-Sleep -Milliseconds 1800
+        } elseif (\$screen -match 'OPTION' -and \$screen -notmatch 'INVALID') {
+            # At the top-level work-type OPTION menu -- Escape triggers sign-off
+            Send-VirtTermKey 'Escape'; Start-Sleep -Milliseconds 1500
         } else {
             Send-VirtTermKey 'F3'; Start-Sleep -Milliseconds 1000
         }
@@ -542,13 +605,17 @@ Run-Test 'VirtTerm-Biz' 'Logoff: reach a clean state at end of tests' {
         \$s = Get-VirtTermScreen
         (\$s -cmatch '(?m)^\\s*ZONE\\s*\$') -or (\$s -match 'CHOICE') -or (\$s -match 'Vogel')
     }
-    for (\$i = 0; \$i -lt 30; \$i++) {
+    for (\$i = 0; \$i -lt 40; \$i++) {
         if (& \$atClean) { break }
         \$screen = Get-VirtTermScreen
         if (\$screen -match 'F1.*Cancel') {
             Send-VirtTermKey 'F1'; Start-Sleep -Milliseconds 1500
-        } elseif (\$screen -match 'ENTER.*Continue') {
+        } elseif (\$screen -match 'ENTER.*Continue|press ENTER') {
             Send-VirtTermKey 'Enter'; Start-Sleep -Milliseconds 1200
+        } elseif (\$screen -match 'ITEM.?ID|LOCATION|SCAN') {
+            Send-VirtTermKey 'F1'; Start-Sleep -Milliseconds 1800
+        } elseif (\$screen -match 'OPTION' -and \$screen -notmatch 'INVALID') {
+            Send-VirtTermKey 'Escape'; Start-Sleep -Milliseconds 1500
         } else {
             Send-VirtTermKey 'F3'; Start-Sleep -Milliseconds 1000
         }
@@ -616,6 +683,49 @@ public class WinApi {
     [DllImport("user32.dll")] public static extern bool   EnumChildWindows(IntPtr parent, EnumChildProc cb, IntPtr lp);
     [DllImport("user32.dll")] public static extern bool   EnumWindows(EnumChildProc cb, IntPtr lp);
     public delegate bool EnumChildProc(IntPtr hWnd, IntPtr lp);
+
+    // SendInput -- hardware-level mouse simulation (works for VB6 splash/FORKLIFT screens
+    // that ignore PostMessage because they poll the real hardware input queue).
+    // Note: RECT struct is defined further down (shared with CaptureScrnClassBase64).
+    [DllImport("user32.dll")] static extern uint SendInput(uint n, INPUT[] inputs, int size);
+    [DllImport("user32.dll")] static extern int  GetSystemMetrics(int nIndex);
+    [StructLayout(LayoutKind.Sequential)] struct MOUSEINPUT {
+        public int  dx, dy; public uint mouseData, dwFlags, time; public IntPtr dwExtraInfo;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct INPUT {
+        public uint type; public MOUSEINPUT mi;  // only mouse input used here
+    }
+    const uint INPUT_MOUSE = 0;
+    const uint MOUSEEVENTF_MOVE        = 0x0001;
+    const uint MOUSEEVENTF_LEFTDOWN    = 0x0002;
+    const uint MOUSEEVENTF_LEFTUP      = 0x0004;
+    const uint MOUSEEVENTF_ABSOLUTE    = 0x8000;
+
+    // ClickWindowCenter: moves the real mouse cursor to the window's centre and
+    // performs a hardware left-click.  Works where PostMessage is ignored.
+    public static void ClickWindowCenter(IntPtr hWnd) {
+        RECT rc;
+        if (!GetWindowRect(hWnd, out rc)) return;
+        int cx = (rc.Left + rc.Right)  / 2;
+        int cy = (rc.Top  + rc.Bottom) / 2;
+        int sw = GetSystemMetrics(0);   // screen width
+        int sh = GetSystemMetrics(1);   // screen height
+        // Normalise to 0-65535 for MOUSEEVENTF_ABSOLUTE
+        int nx = (cx * 65535) / sw;
+        int ny = (cy * 65535) / sh;
+        var inputs = new INPUT[3];
+        // Move
+        inputs[0].type = INPUT_MOUSE;
+        inputs[0].mi   = new MOUSEINPUT { dx=nx, dy=ny, dwFlags=MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE };
+        // Down
+        inputs[1].type = INPUT_MOUSE;
+        inputs[1].mi   = new MOUSEINPUT { dwFlags=MOUSEEVENTF_LEFTDOWN|MOUSEEVENTF_ABSOLUTE, dx=nx, dy=ny };
+        // Up
+        inputs[2].type = INPUT_MOUSE;
+        inputs[2].mi   = new MOUSEINPUT { dwFlags=MOUSEEVENTF_LEFTUP|MOUSEEVENTF_ABSOLUTE, dx=nx, dy=ny };
+        SendInput(3, inputs, Marshal.SizeOf(typeof(INPUT)));
+        Sleep(120);
+    }
 
     public const uint WM_KEYDOWN  = 0x0100;
     public const uint WM_KEYUP    = 0x0101;
@@ -728,6 +838,57 @@ public class WinApi {
 \$script:VTProcess = \$null
 \$script:VTHwnd    = [IntPtr]::Zero
 \$VirtTermExe      = 'C:\\Users\\PVenkatesh\\Downloads\\VirtualScanner\\x86\\VirtTerm.exe'
+\$VTRegRoot        = 'HKCU:\\Software\\HighJump Software\\Advantage Virtual Terminal'
+
+# -- App-aware device configuration --------------------------------------------
+# Set-VirtTermDevice: writes the correct device profile to the registry BEFORE
+# launching VirtTerm so it connects to the right app server (WA/MA/YA port).
+# VirtTerm reads registry on startup, so kill-then-relaunch picks up the new config.
+function Set-VirtTermDevice {
+    param([string]\$App = \$script:App)
+    # Look up the device map defined in Run-Tests.ps1
+    \$map = if (\$script:VTDeviceMap -and \$script:VTDeviceMap.ContainsKey(\$App)) {
+        \$script:VTDeviceMap[\$App]
+    } else { \$null }
+
+    if (-not \$map -or -not \$map.DeviceName) {
+        # No mapping for this app -- leave registry as-is.
+        \$cur = (Get-ItemProperty \$VTRegRoot -ErrorAction SilentlyContinue).'Default Device Name'
+        Write-Host "  VirtTerm: no device map for '$App' -- using current device: \$cur" -ForegroundColor DarkYellow
+        return
+    }
+
+    \$dn = \$map.DeviceName
+    # Write active device name to the top-level key.
+    # DisplayMenuOptions=1 keeps the device-selection screen visible (the user must
+    # click the device name once to establish the WMS TCP connection).
+    # DisplayMenuOptions=0 was tested and causes VirtTerm to make no TCP connections at all.
+    Set-ItemProperty -Path \$VTRegRoot -Name 'DisplayMenuOptions' -Value 1 -Type DWord -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path \$VTRegRoot -Name 'Default Device Name' -Value \$dn -ErrorAction SilentlyContinue
+    # Create/update the device sub-key with connection details.
+    \$devPath = Join-Path \$VTRegRoot \$dn
+    if (-not (Test-Path \$devPath)) { New-Item -Path \$devPath -Force | Out-Null }
+    Set-ItemProperty -Path \$devPath -Name 'IP Address' -Value \$map.IP -Type String -ErrorAction SilentlyContinue
+    # Port: preserve existing registry type to avoid corrupting VirtTerm's connection config.
+    \$existing = Get-ItemProperty \$devPath -ErrorAction SilentlyContinue
+    \$portProp  = if (\$existing) { \$existing.PSObject.Properties['Port'] } else { \$null }
+    if (\$portProp -and \$portProp.TypeNameOfValue -match 'String') {
+        Set-ItemProperty -Path \$devPath -Name 'Port' -Value "\$(\$map.Port)" -Type String -ErrorAction SilentlyContinue
+    } else {
+        Set-ItemProperty -Path \$devPath -Name 'Port' -Value ([int]\$map.Port) -Type DWord  -ErrorAction SilentlyContinue
+    }
+    Write-Host "  VirtTerm device: \$dn  (\$(\$map.IP):\$(\$map.Port))  [DisplayMenuOptions=1 -- click device to connect]" -ForegroundColor DarkGray
+}
+
+# Get-VirtTermDevices: queries the EAR API to discover registered VT devices and
+# their connection info for each app. Useful for populating \$VTDeviceMap.
+function Get-VirtTermDevices {
+    param([string]\$App = '')
+    \$sep = if (\$App) { "&app=\$App" } else { '' }
+    try {
+        Invoke-RestMethod -Uri "\$script:BaseUrl/api/vt-devices?server=\$script:Server\$sep" -Method GET -TimeoutSec 15
+    } catch { Write-Warning "Get-VirtTermDevices failed: \$(\$_.Exception.Message)"; @() }
+}
 
 # -- Launch & find -------------------------------------------------------------
 function Start-VirtTerm {
