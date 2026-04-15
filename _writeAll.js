@@ -30,15 +30,8 @@ param(
 \$script:ProcessId     = \$null
 \$script:ProcessRows   = \$null
 
-# Virtual Terminal device registry profiles, keyed by app name (WA / MA / YA).
-# Each profile tells VirtTerm which server+port to connect to.
-# Registry path: HKCU:\\Software\\HighJump Software\\Advantage Virtual Terminal\\<DeviceName>
-# WA is confirmed. Run Get-VirtTermDevices (below) to discover MA / YA entries.
-\$script:VTDeviceMap = @{
-    WA = @{ DeviceName='WAVTUAT10'; IP='172.26.161.132'; Port=4400 }
-    MA = @{ DeviceName='';          IP='';                Port=0    }  # TODO: fill in
-    YA = @{ DeviceName='';          IP='';                Port=0    }  # TODO: fill in
-}
+# VirtTerm device config is resolved live from ADV.dbo.t_device via /api/vt-devices.
+# No hardcoded IP/port -- Set-VirtTermDevice fetches the correct values for each app.
 
 function Invoke-Api([string]\$Path) {
     \$sep = if (\$Path -match '\\?') { '&' } else { '?' }
@@ -841,43 +834,38 @@ public class WinApi {
 \$VTRegRoot        = 'HKCU:\\Software\\HighJump Software\\Advantage Virtual Terminal'
 
 # -- App-aware device configuration --------------------------------------------
-# Set-VirtTermDevice: writes the correct device profile to the registry BEFORE
-# launching VirtTerm so it connects to the right app server (WA/MA/YA port).
-# VirtTerm reads registry on startup, so kill-then-relaunch picks up the new config.
+# Set-VirtTermDevice: queries /api/vt-devices (which reads ADV.dbo.t_device) to
+# get the correct device name, IP, and port for the target app, then writes them
+# to the VirtTerm registry so the right WMS server is used on next launch.
 function Set-VirtTermDevice {
     param([string]\$App = \$script:App)
-    # Look up the device map defined in Run-Tests.ps1
-    \$map = if (\$script:VTDeviceMap -and \$script:VTDeviceMap.ContainsKey(\$App)) {
-        \$script:VTDeviceMap[\$App]
-    } else { \$null }
 
-    if (-not \$map -or -not \$map.DeviceName) {
-        # No mapping for this app -- leave registry as-is.
+    # Fetch device list from t_device via the EAR API
+    \$devices = Get-VirtTermDevices -App \$App
+    \$dev = \$devices | Select-Object -First 1
+
+    if (-not \$dev -or -not \$dev.device_name) {
         \$cur = (Get-ItemProperty \$VTRegRoot -ErrorAction SilentlyContinue).'Default Device Name'
-        Write-Host "  VirtTerm: no device map for '$App' -- using current device: \$cur" -ForegroundColor DarkYellow
+        Write-Host "  VirtTerm: no device found in t_device for app '\$App' -- using current: \$cur" -ForegroundColor DarkYellow
         return
     }
 
-    \$dn = \$map.DeviceName
-    # Write active device name to the top-level key.
-    # DisplayMenuOptions=1 keeps the device-selection screen visible (the user must
-    # click the device name once to establish the WMS TCP connection).
-    # DisplayMenuOptions=0 was tested and causes VirtTerm to make no TCP connections at all.
-    Set-ItemProperty -Path \$VTRegRoot -Name 'DisplayMenuOptions' -Value 1 -Type DWord -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path \$VTRegRoot -Name 'Default Device Name' -Value \$dn -ErrorAction SilentlyContinue
-    # Create/update the device sub-key with connection details.
+    \$dn   = \$dev.device_name
+    \$ip   = \$dev.ip_address
+    \$port = \$dev.port   # integer straight from the DB -- no manual entry, no typos
+
+    # Write active device name + DisplayMenuOptions to the top-level key.
+    # DisplayMenuOptions=1 shows the device-selection list; user clicks once to connect.
+    Set-ItemProperty -Path \$VTRegRoot -Name 'DisplayMenuOptions'  -Value 1    -Type DWord  -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path \$VTRegRoot -Name 'Default Device Name' -Value \$dn  -Type String -ErrorAction SilentlyContinue
+
+    # Create/update the device sub-key with IP and port from t_device.
     \$devPath = Join-Path \$VTRegRoot \$dn
     if (-not (Test-Path \$devPath)) { New-Item -Path \$devPath -Force | Out-Null }
-    Set-ItemProperty -Path \$devPath -Name 'IP Address' -Value \$map.IP -Type String -ErrorAction SilentlyContinue
-    # Port: preserve existing registry type to avoid corrupting VirtTerm's connection config.
-    \$existing = Get-ItemProperty \$devPath -ErrorAction SilentlyContinue
-    \$portProp  = if (\$existing) { \$existing.PSObject.Properties['Port'] } else { \$null }
-    if (\$portProp -and \$portProp.TypeNameOfValue -match 'String') {
-        Set-ItemProperty -Path \$devPath -Name 'Port' -Value "\$(\$map.Port)" -Type String -ErrorAction SilentlyContinue
-    } else {
-        Set-ItemProperty -Path \$devPath -Name 'Port' -Value ([int]\$map.Port) -Type DWord  -ErrorAction SilentlyContinue
-    }
-    Write-Host "  VirtTerm device: \$dn  (\$(\$map.IP):\$(\$map.Port))  [DisplayMenuOptions=1 -- click device to connect]" -ForegroundColor DarkGray
+    Set-ItemProperty -Path \$devPath -Name 'IP Address' -Value \$ip             -Type String -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path \$devPath -Name 'Port'       -Value ([int]\$port)    -Type DWord  -ErrorAction SilentlyContinue
+
+    Write-Host "  VirtTerm device: \$dn  (\$ip:\$port)  [from t_device -- DisplayMenuOptions=1]" -ForegroundColor DarkGray
 }
 
 # Get-VirtTermDevices: queries the EAR API to discover registered VT devices and
