@@ -233,7 +233,8 @@
             padding:4px 12px; border-radius:6px; border:1.5px solid #c4b5fd; background:#f5f3ff;
             white-space:nowrap;">📋 Features</a>
 
-  <select id="inp-server" style="font-size:0.8rem; border:1.5px solid #c4b5fd;
+  <select id="inp-server" onchange="onServerChange()"
+          style="font-size:0.8rem; border:1.5px solid #c4b5fd;
           border-radius:6px; padding:3px 8px; background:#f5f3ff; color:#1e1b4b; font-weight:600; cursor:pointer;">
     <option value="ArcadiaWHJSqlStage" selected>ArcadiaWHJSqlStage</option>
     <option value="RetailRHjsqldev">RetailRHjsqldev</option>
@@ -303,6 +304,20 @@ let navStack = [];  // history stack
 
 
 function getServer() { return document.getElementById('inp-server').value; }
+
+function onServerChange() {
+  // Reset all view state so stale data from the previous server is cleared
+  searchList = [];
+  allRows    = [];
+  navStack   = [];
+  viewMode   = 'list';
+  closeDetail();
+  document.getElementById('proc-list-view').innerHTML = '';
+  document.getElementById('tbody').innerHTML = '';
+  document.getElementById('btn-back').style.display = 'none';
+  // Reload the device entry-point list from the newly selected server
+  loadDevices();
+}
 
 // Scope dropdown toggle
 function toggleScopeMenu() {
