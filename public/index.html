@@ -245,6 +245,13 @@
 
 
 
+<div id="server-banner" style="
+  padding:6px 24px; background:#f5f3ff; border-bottom:1px solid #e9d5ff;
+  font-size:0.82rem; color:#6d28d9; font-weight:600; display:flex; align-items:center; gap:8px;">
+  <span>🗄️ Server:</span>
+  <span id="server-banner-name" style="color:#4c1d95"></span>
+</div>
+
 <div class="proc-list" id="proc-list-view" style="display:none"></div>
 
 <div class="grid-wrap" id="grid-view">
@@ -305,6 +312,10 @@ let navStack = [];  // history stack
 
 function getServer() { return document.getElementById('inp-server').value; }
 
+function updateServerBanner() {
+  document.getElementById('server-banner-name').textContent = getServer();
+}
+
 function onServerChange() {
   // Reset all view state so stale data from the previous server is cleared
   searchList = [];
@@ -312,9 +323,12 @@ function onServerChange() {
   navStack   = [];
   viewMode   = 'list';
   closeDetail();
+  document.getElementById('proc-list-view').style.display = 'none';
   document.getElementById('proc-list-view').innerHTML = '';
+  document.getElementById('grid-view').style.display = 'block';
   document.getElementById('tbody').innerHTML = '';
   document.getElementById('btn-back').style.display = 'none';
+  updateServerBanner();
   // Reload the device entry-point list from the newly selected server
   loadDevices();
 }
@@ -341,8 +355,14 @@ document.querySelectorAll('.type-cb').forEach(cb =>
 
 // Load T_DEVICE processes on first screen
 async function loadDevices() {
+  const server = getServer();
+  updateServerBanner();
+  const pv = document.getElementById('proc-list-view');
+  pv.style.display = 'block';
+  document.getElementById('grid-view').style.display = 'none';
+  pv.innerHTML = `<p style="color:#8892a4;padding:14px">Loading devices from <strong>${server}</strong>…</p>`;
   try {
-    const res = await fetch(`/api/devices?server=${encodeURIComponent(getServer())}`);
+    const res = await fetch(`/api/devices?server=${encodeURIComponent(server)}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     searchList = data;
@@ -352,6 +372,7 @@ async function loadDevices() {
     renderDeviceList();
   } catch(e) {
     console.warn('Device load failed:', e.message);
+    pv.innerHTML = `<p style="color:#ef4444;padding:14px">⚠️ Could not load devices from <strong>${server}</strong>: ${e.message}</p>`;
   }
 }
 
@@ -1417,7 +1438,8 @@ document.addEventListener('contextmenu', e => {
     && !e.target.closest('.proc-list-view')) hideCtxMenu();
 });
 
-// On first load: show T_DEVICE processes; if that fails, fall back to a normal search
+// On first load: show server banner + T_DEVICE processes
+updateServerBanner();
 loadDevices();
 </script>
 </body>
