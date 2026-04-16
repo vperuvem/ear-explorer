@@ -17,9 +17,9 @@ const pools       = {};
 // advDb     : name of the Advantage WMS runtime database on that server
 // label     : display name shown in the dropdown
 const SERVER_CONFIG = {
-  ArcadiaWHJSqlStage: { sqlServer: 'ArcadiaWHJSqlStage', earDb: 'EAR', advDb: 'ADV', label: 'ArcadiaWHJSqlStage (WH Stage)' },
-  RetailRHjsqldev:    { sqlServer: 'RetailRHjsqldev',    earDb: 'EAR', advDb: 'ADV', label: 'RetailRHjsqldev (Retail Dev)'   },
-  RetailRHjsqlStage:  { sqlServer: 'RetailRHjsqlStage',  earDb: 'EAR', advDb: 'ADV', label: 'RetailRHjsqlStage (Retail Stage)' },
+  ArcadiaWHJSqlStage: { sqlServer: 'ArcadiaWHJSqlStage', earDb: 'EAR', advDb: 'ADV', label: 'ArcadiaWHJSqlStage' },
+  RetailRHjsqldev:    { sqlServer: 'RetailRHjsqldev',    earDb: 'EAR', advDb: 'ADV', label: 'RetailRHjsqldev'    },
+  RetailRHjsqlStage:  { sqlServer: 'RetailRHjsqlStage',  earDb: 'EAR', advDb: 'ADV', label: 'RetailRHjsqlStage'  },
 };
 const ALLOWED_SERVERS = Object.keys(SERVER_CONFIG);
 
