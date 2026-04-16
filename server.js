@@ -37,9 +37,14 @@ async function getPool(serverKey) {
   let lastErr;
   for (const drv of ODBC_DRIVERS) {
     try {
-      pools[serverKey] = await mssql.connect({
+      // Use ConnectionPool (not mssql.connect) so each server gets its own
+      // independent pool -- mssql.connect() is a global singleton and reuses
+      // the first connection for every subsequent call regardless of server.
+      const pool = new mssql.ConnectionPool({
         connectionString: `Driver={${drv}};Server=${cfg.sqlServer};Database=${cfg.earDb};Trusted_Connection=yes;`
       });
+      await pool.connect();
+      pools[serverKey] = pool;
       console.log(`Connected to ${cfg.sqlServer} (earDb=${cfg.earDb}, advDb=${cfg.advDb}) using driver: ${drv}`);
       return pools[serverKey];
     } catch(e) { lastErr = e; delete pools[serverKey]; }
