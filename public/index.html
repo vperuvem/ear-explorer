@@ -235,7 +235,9 @@
 
   <select id="inp-server" style="font-size:0.8rem; border:1.5px solid #c4b5fd;
           border-radius:6px; padding:3px 8px; background:#f5f3ff; color:#1e1b4b; font-weight:600; cursor:pointer;">
-    <option value="">— loading servers… —</option>
+    <option value="ArcadiaWHJSqlStage" selected>ArcadiaWHJSqlStage</option>
+    <option value="RetailRHjsqldev">RetailRHjsqldev</option>
+    <option value="RetailRHjsqlStage">RetailRHjsqlStage</option>
   </select>
 </header>
 
@@ -1399,21 +1401,6 @@ document.addEventListener('contextmenu', e => {
     && !e.target.closest('.group-header')
     && !e.target.closest('.proc-list-view')) hideCtxMenu();
 });
-
-// ── Load server list from /api/servers ───────────────────────────────────────
-// Populates the dropdown from SERVER_CONFIG so it always reflects the server config.
-(async function loadServers() {
-  const sel = document.getElementById('inp-server');
-  try {
-    const servers = await (await fetch('/api/servers')).json();
-    sel.innerHTML = servers.map((s, i) =>
-      `<option value="${s.key}"${i === 0 ? ' selected' : ''}>${s.label}</option>`
-    ).join('');
-  } catch(e) {
-    // fallback: keep the placeholder and let users type in the search box
-    sel.innerHTML = '<option value="ArcadiaWHJSqlStage" selected>ArcadiaWHJSqlStage</option>';
-  }
-})();
 
 // On first load: show T_DEVICE processes; if that fails, fall back to a normal search
 loadDevices();
