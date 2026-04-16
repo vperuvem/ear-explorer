@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>EAR Explorer — Features</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif;
+         background: linear-gradient(135deg, #ede9fe 0%, #dbeafe 100%);
+         background-attachment: fixed; color: #0f172a; min-height: 100vh; }
+
+  header { background: #ffffff; padding: 10px 24px; border-bottom: 3px solid #7c3aed;
+           display: flex; align-items: center; gap: 16px;
+           box-shadow: 0 2px 8px rgba(124,58,237,0.10); }
+  header h1 { font-size: 1.2rem; color: #7c3aed; white-space: nowrap; }
+  header a  { font-size: 0.88rem; font-weight: 600; color: #7c3aed;
+               text-decoration: none; padding: 4px 12px; border-radius: 6px;
+               border: 1.5px solid #c4b5fd; background: #f5f3ff; }
+  header a:hover { background: #ede9fe; }
+
+  .page { max-width: 900px; margin: 40px auto; padding: 0 24px 60px; }
+
+  h2 { font-size: 1.5rem; color: #7c3aed; margin-bottom: 6px; margin-top: 36px; }
+  h3 { font-size: 1.05rem; color: #4c1d95; margin: 20px 0 6px; }
+  p  { font-size: 0.93rem; line-height: 1.65; color: #1e293b; margin-bottom: 8px; }
+  ul { margin: 6px 0 10px 22px; }
+  ul li { font-size: 0.92rem; line-height: 1.6; color: #1e293b; margin-bottom: 3px; }
+
+  .hero { background: #ffffff; border-radius: 14px; padding: 28px 32px;
+          box-shadow: 0 4px 20px rgba(124,58,237,0.12); margin-bottom: 10px; }
+  .hero p { font-size: 1.05rem; color: #374151; }
+
+  .card { background: #ffffff; border-radius: 12px; padding: 22px 28px;
+          box-shadow: 0 2px 10px rgba(124,58,237,0.09); margin-bottom: 18px; }
+
+  .badge { display: inline-block; background: #ede9fe; color: #6d28d9;
+           font-size: 0.75rem; font-weight: 700; padding: 2px 9px;
+           border-radius: 10px; margin-right: 6px; vertical-align: middle; }
+
+  .api-table { width: 100%; border-collapse: collapse; font-size: 0.87rem; margin-top: 8px; }
+  .api-table th { background: #f5f3ff; color: #6d28d9; font-weight: 700;
+                  padding: 7px 12px; text-align: left; border-bottom: 2px solid #c4b5fd; }
+  .api-table td { padding: 7px 12px; border-bottom: 1px solid #e9d5ff; color: #1e293b; }
+  .api-table tr:last-child td { border-bottom: none; }
+  .api-table code { font-family: monospace; font-size: 0.83rem;
+                    background: #ede9fe; padding: 1px 5px; border-radius: 4px; }
+
+  .divider { border: none; border-top: 2px solid #e9d5ff; margin: 36px 0 0; }
+  .footer  { margin-top: 14px; font-size: 0.78rem; color: #6b7280; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚙️ HighJump EAR Explorer</h1>
+  <a href="/">← Back to Explorer</a>
+</header>
+
+<div class="page">
+
+  <div class="hero">
+    <h2 style="margin-top:0">What is EAR Explorer?</h2>
+    <p>
+      EAR Explorer is an internal developer tool for reading and navigating the
+      <strong>HighJump Advantage WMS application logic</strong> stored in the
+      <code style="font-family:monospace;background:#ede9fe;padding:1px 5px;border-radius:4px">EAR</code>
+      database. It lets you search across every process, action, screen, SQL statement,
+      and expression in the WMS — and trace exactly how execution flows between them.
+      A companion <a href="/tester" style="color:#7c3aed;font-weight:600">EAR Tester</a>
+      UI lets you run automated regression tests against a live VirtTerm session.
+    </p>
+  </div>
+
+  <!-- ── Feature 1 ── -->
+  <div class="card">
+    <h2 style="margin-top:0">🔍 Full-Text Process Search</h2>
+    <p>Search by keyword across every object type in the WMS application logic simultaneously.</p>
+    <ul>
+      <li><span class="badge">Process</span> Search process names</li>
+      <li><span class="badge">Calculate</span> Names and arithmetic expressions</li>
+      <li><span class="badge">Compare</span> Names and operand values</li>
+      <li><span class="badge">Database</span> Names and embedded SQL text</li>
+      <li><span class="badge">Dialog</span> Screen names and field labels</li>
+      <li><span class="badge">Field / Record / Constant / Locale</span> Names and values</li>
+      <li><span class="badge">Execute / Publish / Receive / Send / Report / User / List</span> Step labels</li>
+    </ul>
+    <p>Results are scoped to a specific <strong>Application</strong> (WA, MA, YA) and any combination
+       of object types via the <em>🔎 Options</em> dropdown. Searches run live against the WMS SQL Server.</p>
+  </div>
+
+  <!-- ── Feature 2 ── -->
+  <div class="card">
+    <h2 style="margin-top:0">📋 Process Step Viewer</h2>
+    <p>Click any search result to see its full execution sequence in a structured grid:</p>
+    <ul>
+      <li>Line number, label, action type, and step description</li>
+      <li><strong>On Pass / On Fail</strong> branch targets per step</li>
+      <li>Click any action row to open an inline <strong>detail panel</strong> with full SQL, expression tree,
+          dialog field layout, or comparison operands</li>
+      <li>Screen dialogs render an <strong>interactive grid</strong> showing the exact terminal screen layout
+          (field positions, labels, prompt text) in 6×40 / 8×16 / 8×20 format</li>
+    </ul>
+  </div>
+
+  <!-- ── Feature 3 ── -->
+  <div class="card">
+    <h2 style="margin-top:0">🔗 Caller &amp; Call-Path Tracing</h2>
+    <p>For any process, instantly find:</p>
+    <ul>
+      <li><strong>Direct callers</strong> — every process that calls this one (one hop)</li>
+      <li><strong>All entry-point paths</strong> — reverse BFS from the process up to every
+          VirtTerm device entry point, showing the full call chain</li>
+      <li><strong>Action-level paths</strong> — trace a specific Calculate, Database, or Compare
+          action back to its entry points</li>
+    </ul>
+    <p>Results are displayed as a collapsible process list. Click any item to drill into its steps.</p>
+  </div>
+
+  <!-- ── Feature 4 ── -->
+  <div class="card">
+    <h2 style="margin-top:0">🗄️ Multi-Server Support</h2>
+    <p>Switch between WMS environments without leaving the browser. The server selector in the header
+       supports any of the configured SQL Server instances:</p>
+    <ul>
+      <li><strong>ArcadiaWHJSqlStage</strong> — WA staging warehouse</li>
+      <li><strong>RetailRHjsqldev</strong> — Retail development</li>
+      <li><strong>RetailRHjsqlStage</strong> — Retail staging</li>
+    </ul>
+    <p>Every API call is scoped to the selected server; no page reload required.</p>
+  </div>
+
+  <!-- ── Feature 5 ── -->
+  <div class="card">
+    <h2 style="margin-top:0">🧪 EAR Tester</h2>
+    <p>A companion UI (port 9001) that runs automated regression tests against a live VirtTerm session:</p>
+    <ul>
+      <li>Select a Virtual Terminal entry point from <code>ADV.dbo.t_device</code> — device name,
+          IP address, and port are read directly from the database (no manual configuration)</li>
+      <li><strong>API health tests</strong> — search, process detail, callers, edge cases</li>
+      <li><strong>VirtTerm infrastructure tests</strong> — launch, hwnd discovery, screen reading,
+          key/text sending, teardown</li>
+      <li><strong>Business flow tests</strong> — logoff → login → menu navigation → barcode scan</li>
+      <li>Each test step captures a <strong>screenshot</strong> of the VirtTerm screen buffer
+          (via <code>PrintWindow</code>) embedded as a thumbnail in the HTML report</li>
+      <li><strong>Baseline diffing</strong> — REGRESSION / FIXED badges automatically appear
+          when results change between runs</li>
+    </ul>
+  </div>
+
+  <!-- ── Feature 6 ── -->
+  <div class="card">
+    <h2 style="margin-top:0">🗺️ Reachable Dialog Map</h2>
+    <p>The Tester UI includes a BFS-computed graph of every dialog reachable from a given entry point:</p>
+    <ul>
+      <li>637 dialogs mapped per session with a 15-minute cache</li>
+      <li>Dynamic <code>_</code>-prefixed menus resolved from <code>t_menu</code> SQL queries</li>
+      <li>Right-click any dialog node to copy all call paths to the clipboard</li>
+    </ul>
+  </div>
+
+  <!-- ── API Reference ── -->
+  <div class="card">
+    <h2 style="margin-top:0">🔌 API Reference</h2>
+    <h3>EAR Explorer (port 9000)</h3>
+    <table class="api-table">
+      <thead><tr><th>Endpoint</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>GET /api/search</code></td><td>Full-text search across all action types</td></tr>
+        <tr><td><code>GET /api/process/:id</code></td><td>All steps for a process</td></tr>
+        <tr><td><code>GET /api/callers</code></td><td>Direct callers of a process (one hop)</td></tr>
+        <tr><td><code>GET /api/explorer/all-paths</code></td><td>Reverse BFS to all entry points</td></tr>
+        <tr><td><code>GET /api/db-action/:id</code></td><td>SQL statement + resolved field names</td></tr>
+        <tr><td><code>GET /api/calc-action/:id</code></td><td>Calculate expression with operator symbols</td></tr>
+        <tr><td><code>GET /api/compare-action/:id</code></td><td>Compare operands and conditions</td></tr>
+        <tr><td><code>GET /api/vt-devices</code></td><td>Virtual terminal devices from <code>t_device</code></td></tr>
+      </tbody>
+    </table>
+    <h3>EAR Tester (port 9001)</h3>
+    <table class="api-table">
+      <thead><tr><th>Endpoint</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>POST /api/tests/run</code></td><td>Start a test run</td></tr>
+        <tr><td><code>GET /api/tests/status</code></td><td>Poll whether tests are running</td></tr>
+        <tr><td><code>GET /api/tests/results</code></td><td>Latest test results (JSON)</td></tr>
+        <tr><td><code>GET /api/tester/dialogs</code></td><td>BFS reachable dialog map</td></tr>
+        <tr><td><code>GET /api/tester/dynamic-menus</code></td><td>Dynamic menu entries</td></tr>
+        <tr><td><code>POST /api/launch-virtterm</code></td><td>Spawn VirtTerm.exe detached</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <hr class="divider"/>
+  <p class="footer">EAR Explorer &mdash; Ashley Furniture / HighJump WMS &mdash; Internal Tool</p>
+
+</div><!-- .page -->
+</body>
+</html>
