@@ -18,8 +18,7 @@ const pools       = {};
 // label     : display name shown in the dropdown
 const SERVER_CONFIG = {
   ArcadiaWHJSqlStage: { sqlServer: 'ArcadiaWHJSqlStage', earDb: 'EAR', advDb: 'ADV', label: 'ArcadiaWHJSqlStage' },
-  RetailRHjsqldev:    { sqlServer: 'RetailRHjsqldev',    earDb: 'EAR', advDb: 'AAD', label: 'RetailRHjsqldev'    },
-  RetailRHjsqlStage:  { sqlServer: 'RetailRHjsqlStage',  earDb: 'EAR', advDb: 'AAD', label: 'RetailRHjsqlStage'  },
+  RetailRHJSqlUAT:    { sqlServer: 'RetailRHJSqlUAT',    earDb: 'EAR', advDb: 'ADV', label: 'RetailRHJSqlUAT'    },
 };
 const ALLOWED_SERVERS = Object.keys(SERVER_CONFIG);
 
