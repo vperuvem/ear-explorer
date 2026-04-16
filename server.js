@@ -5,12 +5,23 @@ const fs      = require('fs');
 const http    = require('http');
 const mssql   = require('mssql/msnodesqlv8');
 
-const PORT            = 9000;
-const TESTER_PORT     = 9001;
-const TESTER_DIR      = path.join(__dirname, '..', 'ear-tester');
-const DATABASE        = 'EAR';
-const ALLOWED_SERVERS = ['ArcadiaWHJSqlStage','RetailRHjsqldev','RetailRHjsqlStage'];
-const pools           = {};
+const PORT        = 9000;
+const TESTER_PORT = 9001;
+const TESTER_DIR  = path.join(__dirname, '..', 'ear-tester');
+const pools       = {};
+
+// ── Server configuration ──────────────────────────────────────────────────────
+// Each key is the value sent by the UI dropdown.
+// sqlServer : SQL Server hostname / instance name
+// earDb     : name of the EAR application-rules database on that server
+// advDb     : name of the Advantage WMS runtime database on that server
+// label     : display name shown in the dropdown
+const SERVER_CONFIG = {
+  ArcadiaWHJSqlStage: { sqlServer: 'ArcadiaWHJSqlStage', earDb: 'EAR', advDb: 'ADV', label: 'ArcadiaWHJSqlStage (WH Stage)' },
+  RetailRHjsqldev:    { sqlServer: 'RetailRHjsqldev',    earDb: 'EAR', advDb: 'ADV', label: 'RetailRHjsqldev (Retail Dev)'   },
+  RetailRHjsqlStage:  { sqlServer: 'RetailRHjsqlStage',  earDb: 'EAR', advDb: 'ADV', label: 'RetailRHjsqlStage (Retail Stage)' },
+};
+const ALLOWED_SERVERS = Object.keys(SERVER_CONFIG);
 
 // ── Connection pool per server ────────────────────────────────────────────────
 const ODBC_DRIVERS = [
@@ -21,28 +32,35 @@ const ODBC_DRIVERS = [
   'SQL Server'
 ];
 
-async function getPool(server) {
-  if (pools[server]) return pools[server];
+async function getPool(serverKey) {
+  if (pools[serverKey]) return pools[serverKey];
+  const cfg = SERVER_CONFIG[serverKey];
   let lastErr;
   for (const drv of ODBC_DRIVERS) {
     try {
-      pools[server] = await mssql.connect({
-        connectionString: `Driver={${drv}};Server=${server};Database=${DATABASE};Trusted_Connection=yes;`
+      pools[serverKey] = await mssql.connect({
+        connectionString: `Driver={${drv}};Server=${cfg.sqlServer};Database=${cfg.earDb};Trusted_Connection=yes;`
       });
-      console.log(`Connected to ${server} using driver: ${drv}`);
-      return pools[server];
-    } catch(e) { lastErr = e; delete pools[server]; }
+      console.log(`Connected to ${cfg.sqlServer} (earDb=${cfg.earDb}, advDb=${cfg.advDb}) using driver: ${drv}`);
+      return pools[serverKey];
+    } catch(e) { lastErr = e; delete pools[serverKey]; }
   }
-  throw new Error(`Could not connect to ${server}. No working ODBC driver found. Last error: ${lastErr.message}`);
+  throw new Error(`Could not connect to ${cfg.sqlServer}. No working ODBC driver. Last error: ${lastErr.message}`);
 }
 
 // ── Run a parameterised query, strip control chars from strings ───────────────
-async function runQuery(server, sql, params = {}) {
-  const pool = await getPool(server);
+// Replaces ADV.dbo. and EAR.dbo. tokens in the SQL with the per-server
+// configured database names so queries work across all environments.
+async function runQuery(serverKey, sql, params = {}) {
+  const cfg = SERVER_CONFIG[serverKey] || SERVER_CONFIG[ALLOWED_SERVERS[0]];
+  const resolved = sql
+    .replace(/\bADV\.dbo\./gi, `${cfg.advDb}.dbo.`)
+    .replace(/\bEAR\.dbo\./gi, `${cfg.earDb}.dbo.`);
+  const pool = await getPool(serverKey);
   const req  = pool.request();
   for (const [k, v] of Object.entries(params))
     req.input(k, mssql.NVarChar, v == null ? '' : String(v));
-  const { recordset } = await req.query(sql);
+  const { recordset } = await req.query(resolved);
   return recordset.map(row => {
     const obj = {};
     for (const [k, v] of Object.entries(row))
@@ -160,9 +178,14 @@ app.get('/', (req, res) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Returns the server list from SERVER_CONFIG so the UI dropdown is always in sync.
+app.get('/api/servers', (_req, res) => {
+  res.json(ALLOWED_SERVERS.map(key => ({ key, label: SERVER_CONFIG[key].label })));
+});
+
 function getServer(req) {
-  const s = req.query.server || 'ArcadiaWHJSqlStage';
-  return ALLOWED_SERVERS.includes(s) ? s : 'ArcadiaWHJSqlStage';
+  const s = req.query.server || ALLOWED_SERVERS[0];
+  return ALLOWED_SERVERS.includes(s) ? s : ALLOWED_SERVERS[0];
 }
 
 function send(res, rows) { res.json(rows); }
@@ -832,6 +855,44 @@ app.get('/api/tester/dynamic-menus', async (req, res) => {
     console.log(`[dynmenus] done menus=${result.length} ${Date.now()-t0}ms`);
     send(res, result);
   } catch(e) { sendErr(res, e); }
+});
+
+// ── VirtTerm device config per app ───────────────────────────────────────────
+// Returns Virtual Terminal devices with their connection details (name, IP, port)
+// so the test framework can configure VirtTerm's registry before launching it.
+app.get('/api/vt-devices', async (req, res) => {
+  const app = req.query.app || '';
+  try {
+    const rows = await runQuery(getServer(req), `
+      SELECT
+        d.device_name,
+        d.ip_address,
+        d.port,
+        dt.dev_type,
+        a.name AS app_name
+      FROM ADV.dbo.t_device       (NOLOCK) d
+      JOIN ADV.dbo.t_solution     (NOLOCK) sol ON sol.solution_id    = d.solution_id
+      JOIN ADV.dbo.t_device_type  (NOLOCK) dt  ON dt.device_type_id  = d.device_type_id
+      JOIN EAR.dbo.t_application_development (NOLOCK) a
+           ON a.application_id = sol.application_id
+      WHERE dt.dev_type LIKE '%Virtual%'
+        AND (@app = '' OR a.name = @app)
+      ORDER BY a.name, d.device_name`, { app });
+    send(res, rows);
+  } catch(e) {
+    // Column names vary across WMS versions -- fall back to broader exploration
+    try {
+      const rows = await runQuery(getServer(req), `
+        SELECT TOP 20 d.*, dt.dev_type, a.name AS app_name
+        FROM ADV.dbo.t_device      (NOLOCK) d
+        JOIN ADV.dbo.t_solution    (NOLOCK) sol ON sol.solution_id   = d.solution_id
+        JOIN ADV.dbo.t_device_type (NOLOCK) dt  ON dt.device_type_id = d.device_type_id
+        JOIN EAR.dbo.t_application_development (NOLOCK) a
+             ON a.application_id = sol.application_id
+        WHERE dt.dev_type LIKE '%Virtual%'`, {});
+      send(res, rows);
+    } catch(e2) { sendErr(res, e2); }
+  }
 });
 
 // ── Launch VirtTerm ───────────────────────────────────────────────────────────
