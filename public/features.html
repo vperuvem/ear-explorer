@@ -120,12 +120,15 @@
     <h2 style="margin-top:0">🗄️ Multi-Server Support</h2>
     <p>Switch between WMS environments without leaving the browser. The server selector in the header
        supports any of the configured SQL Server instances:</p>
-    <ul>
-      <li><strong>ArcadiaWHJSqlStage</strong></li>
-      <li><strong>RetailRHjsqldev</strong></li>
-      <li><strong>RetailRHjsqlStage</strong></li>
-    </ul>
-    <p>Every API call is scoped to the selected server; no page reload required.</p>
+    <table class="api-table" style="margin-top:10px">
+      <thead><tr><th>Server</th><th>EAR database</th><th>Runtime database</th></tr></thead>
+      <tbody>
+        <tr><td><strong>ArcadiaWHJSqlStage</strong></td><td>EAR</td><td>ADV</td></tr>
+        <tr><td><strong>RetailRHjsqldev</strong></td><td>EAR</td><td>AAD</td></tr>
+        <tr><td><strong>RetailRHjsqlStage</strong></td><td>EAR</td><td>AAD</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:10px">Every API call is scoped to the selected server; no page reload required.</p>
   </div>
 
   <!-- ── API Reference ── -->

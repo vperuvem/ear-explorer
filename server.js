@@ -18,8 +18,8 @@ const pools       = {};
 // label     : display name shown in the dropdown
 const SERVER_CONFIG = {
   ArcadiaWHJSqlStage: { sqlServer: 'ArcadiaWHJSqlStage', earDb: 'EAR', advDb: 'ADV', label: 'ArcadiaWHJSqlStage' },
-  RetailRHjsqldev:    { sqlServer: 'RetailRHjsqldev',    earDb: 'EAR', advDb: 'ADV', label: 'RetailRHjsqldev'    },
-  RetailRHjsqlStage:  { sqlServer: 'RetailRHjsqlStage',  earDb: 'EAR', advDb: 'ADV', label: 'RetailRHjsqlStage'  },
+  RetailRHjsqldev:    { sqlServer: 'RetailRHjsqldev',    earDb: 'EAR', advDb: 'AAD', label: 'RetailRHjsqldev'    },
+  RetailRHjsqlStage:  { sqlServer: 'RetailRHjsqlStage',  earDb: 'EAR', advDb: 'AAD', label: 'RetailRHjsqlStage'  },
 };
 const ALLOWED_SERVERS = Object.keys(SERVER_CONFIG);
 
@@ -611,7 +611,7 @@ async function getGraph(server, app) {
   // Q4 — _-prefixed menu templates with their visible item texts
   const menuTargetRows = menuInvokers.length ? await runQuery(server, `
     SELECT DISTINCT tm.process AS menu_name, tm.text AS item_text
-    FROM AAD.dbo.t_menu tm (NOLOCK)
+    FROM ADV.dbo.t_menu tm (NOLOCK)
     WHERE tm.process LIKE '[_]%' AND tm.text IS NOT NULL AND LEN(TRIM(tm.text)) > 0
     ORDER BY tm.process, tm.text`, {}) : [];
   console.log(`[graph] Q4 menu_items=${menuTargetRows.length} ${Date.now()-t0}ms`);
@@ -714,7 +714,7 @@ app.get('/api/tester/dynamic-menus', async (req, res) => {
     const t0 = Date.now();
     console.log(`[dynmenus] start entry=${entryId} app=${appName}`);
 
-    // Q1 — all _-prefixed menus from t_menu (no app filter — menus are global in AAD)
+    // Q1 — all _-prefixed menus from t_menu (no app filter — menus are global in the runtime db)
     const menuRows = await runQuery(server, `
       SELECT DISTINCT
         tm.process   AS dyn_proc,
@@ -723,7 +723,7 @@ app.get('/api/tester/dynamic-menus', async (req, res) => {
         tm.sequence,
         tm.text,
         tm.name      AS target_name
-      FROM AAD.dbo.t_menu tm (NOLOCK)
+      FROM ADV.dbo.t_menu tm (NOLOCK)
       WHERE tm.process LIKE '[_]%'
       ORDER BY tm.process, tm.area_id, tm.sequence`, {});
     console.log(`[dynmenus] Q1 menus=${menuRows.length} ${Date.now()-t0}ms`);
