@@ -10,6 +10,21 @@
 ## ⚡ Last Session — 2026-04-18
 
 ### Last prompt
+> "is the server not running?"
+
+### What was done
+- Confirmed server IS running — `EADDRINUSE` on second start attempt proved port 9000 already occupied by background node process. No action needed.
+
+### Before that
+> "use this PAT - [redacted], store it somewhere but don't check it into the repo"
+
+- New PAT stored in `.git/config` `url =` for both repos — never tracked, never committed:
+  - `ear-explorer/.git/config` — verified via file read ✅
+  - `ear-tester/.git/config` — verified via copied config ✅
+- Old PAT commits (`2b3292f`, `353acbd`) scrubbed from ear-explorer history via `git reset --soft 73ed970` + recommit as `b50db61`
+- Clean commit pushed; remote confirmed in sync (`origin/main..HEAD` is empty)
+
+### Before that
 > "when I click on copy all entry-point paths, sort the paths by ascending order"
 
 ### What was done
