@@ -592,6 +592,49 @@ Run-Test 'VirtTerm-Biz' 'Barcode scan: F3 returns back from scan screen' {
     @{ ok=\$true; detail="Screen: [\$screen]" }
 }
 
+Section "VirtTerm Fork Workflow (Business)"
+Run-Test 'VirtTerm-Biz' 'Return to OPTION menu before Fork test' {
+    # Ensure we are at the top-level OPTION (work-type) menu.
+    # If inside a sub-menu from the barcode/nav tests, F3 walks back.
+    for (\$i = 0; \$i -lt 10; \$i++) {
+        \$screen = Get-VirtTermScreen
+        if (\$screen -match 'OPTION') { break }
+        Send-VirtTermKey 'F3'; Start-Sleep -Milliseconds 1200
+    }
+    \$screen = Get-VirtTermScreen
+    if (\$screen -notmatch 'OPTION') { return "Could not reach OPTION menu. Screen: [\$screen]" }
+    @{ ok=\$true; detail="At OPTION. Screen: [\$screen]" }
+}
+Run-Test 'VirtTerm-Biz' 'Select Fork from OPTION menu' {
+    \$screen = Get-VirtTermScreen
+    if (\$screen -notmatch 'OPTION') { return "Not at OPTION menu. Screen: [\$screen]" }
+    # Find the Fork option number dynamically from the screen text.
+    # WMS renders the menu as lines like "  3 Fork" or "3 Fork Truck" etc.
+    \$forkLine = (\$screen -split "\`n") | Where-Object { \$_ -match '^\\s*\\d+\\s+Fork' } | Select-Object -First 1
+    if (-not \$forkLine) { return "Fork option not visible on OPTION screen. Screen: [\$screen]" }
+    \$forkNum  = [regex]::Match(\$forkLine, '^\\s*(\\d+)').Groups[1].Value
+    Write-Host "  Fork is option #\$forkNum" -ForegroundColor DarkGray
+    Send-VirtTermText \$forkNum; Send-VirtTermKey 'Enter'
+    Start-Sleep -Milliseconds 2000
+    \$screen = Get-VirtTermScreen
+    @{ ok=\$true; detail="Selected Fork (option \$forkNum). Screen: [\$screen]" }
+}
+Run-Test 'VirtTerm-Biz' 'F1 logs out from Fork screen' {
+    # F1 from inside a Fork/work-type screen returns to OPTION.
+    # F1 from OPTION triggers the WMS logoff/sign-off flow (reaches ZONE prompt).
+    Send-VirtTermKey 'F1'; Start-Sleep -Milliseconds 2000
+    \$screen = Get-VirtTermScreen
+    # If F1 just returned us to OPTION, press F1 once more to sign off.
+    if (\$screen -match 'OPTION') {
+        Write-Host "  At OPTION after first F1 -- pressing F1 again to sign off" -ForegroundColor DarkGray
+        Send-VirtTermKey 'F1'; Start-Sleep -Milliseconds 2000
+        \$screen = Get-VirtTermScreen
+    }
+    \$loggedOut = \$screen -cmatch '(?m)^\s*ZONE\s*$' -or \$screen -match 'CHOICE'
+    if (-not \$loggedOut) { return "Did not reach ZONE/logoff screen after F1. Screen: [\$screen]" }
+    @{ ok=\$true; detail="Logged out via F1. Screen: [\$screen]" }
+}
+
 Section "VirtTerm Logoff (Business)"
 Run-Test 'VirtTerm-Biz' 'Logoff: reach a clean state at end of tests' {
     \$atClean = {
