@@ -1417,7 +1417,8 @@ async function fetchCopyProcessPaths(procId, procName) {
 async function fetchCopyActionPaths(type, id, name) {
   const app = document.getElementById('inp-app').value.trim();
   try {
-    const res   = await fetch(`/api/action-paths?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}&app=${encodeURIComponent(app)}&server=${encodeURIComponent(getServer())}`);
+    // Pass name so the server appends it as the final → segment in every path
+    const res   = await fetch(`/api/action-paths?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}&app=${encodeURIComponent(app)}&server=${encodeURIComponent(getServer())}&name=${encodeURIComponent(name)}`);
     const paths = await res.json();
     if (paths.error) throw new Error(paths.error);
     if (!paths.length) return `∅ No entry-point paths to "${name}"`;

@@ -316,6 +316,7 @@ app.get('/api/action-paths', async (req, res) => {
     const app        = req.query.app  || 'WA';
     const actionId   = (req.query.id  || '').toUpperCase();
     const actionType = parseInt(req.query.type || '0', 10);
+    const actionName = (req.query.name || '').trim();   // label to append at path end
     if (!actionId || !actionType) return send(res, []);
 
     // Step 1: which processes contain this action?
@@ -371,12 +372,15 @@ app.get('/api/action-paths', async (req, res) => {
         const key = path; // path string is already unique per root→proc pair
         if (seen.has(key)) continue;
         seen.add(key);
+        // Append the target action name so the full chain is:
+        // EntryPoint → … → ContainingProcess → ActionName
+        const fullPath = actionName ? `${path} → ${actionName}` : path;
         results.push({
           id:          nodeId,
           name:        nameOf.get(nodeId) || nodeId,
           processName: procName,
-          path,
-          depth:       path.split(' → ').length - 1
+          path:        fullPath,
+          depth:       fullPath.split(' → ').length - 1
         });
       }
     }
