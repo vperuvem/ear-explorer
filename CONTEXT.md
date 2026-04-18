@@ -10,6 +10,13 @@
 ## ⚡ Last Session — 2026-04-18
 
 ### Last prompt
+> "copy all entry-point paths is not working some"
+
+### What was done
+- **Root cause:** `fetchCopyProcessPaths` (right-click menu) strictly filtered `paths.filter(p => p.isRoot)` and returned `∅` when no roots were found — even when valid paths existed. `copyCallerPaths` (📋 button) had the correct fallback logic but the right-click path did not.
+- **Fix:** All three copy functions now use the same logic: prefer root-only paths; fall back to all paths when none are marked `isRoot`. Committed: `a63bd82`
+
+### Before that
 > "is the server not running?"
 
 ### What was done
