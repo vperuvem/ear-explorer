@@ -14,11 +14,12 @@ const pools       = {};
 // Each key is the value sent by the UI dropdown.
 // sqlServer : SQL Server hostname / instance name
 // earDb     : name of the EAR application-rules database on that server
-// advDb     : name of the Advantage WMS runtime database on that server
+// advDb     : runtime database for device/solution tables (t_device, t_solution, etc.)
+// menuDb    : runtime database for menu tables (t_menu) -- same as advDb on WH, AAD on Retail
 // label     : display name shown in the dropdown
 const SERVER_CONFIG = {
-  ArcadiaWHJSqlStage: { sqlServer: 'ArcadiaWHJSqlStage', earDb: 'EAR', advDb: 'ADV', label: 'ArcadiaWHJSqlStage' },
-  RetailRHJSqlUAT:    { sqlServer: 'RetailRHJSqlUAT',    earDb: 'EAR', advDb: 'ADV', label: 'RetailRHJSqlUAT'    },
+  ArcadiaWHJSqlStage: { sqlServer: 'ArcadiaWHJSqlStage', earDb: 'EAR', advDb: 'ADV', menuDb: 'ADV', label: 'ArcadiaWHJSqlStage' },
+  RetailRHJSqlUAT:    { sqlServer: 'RetailRHJSqlUAT',    earDb: 'EAR', advDb: 'ADV', menuDb: 'AAD', label: 'RetailRHJSqlUAT'    },
 };
 const ALLOWED_SERVERS = Object.keys(SERVER_CONFIG);
 
@@ -59,7 +60,8 @@ async function runQuery(serverKey, sql, params = {}) {
   const cfg = SERVER_CONFIG[serverKey] || SERVER_CONFIG[ALLOWED_SERVERS[0]];
   const resolved = sql
     .replace(/\bADV\.dbo\./gi, `${cfg.advDb}.dbo.`)
-    .replace(/\bEAR\.dbo\./gi, `${cfg.earDb}.dbo.`);
+    .replace(/\bEAR\.dbo\./gi, `${cfg.earDb}.dbo.`)
+    .replace(/\bAAD\.dbo\./gi, `${cfg.menuDb}.dbo.`);
   const pool = await getPool(serverKey);
   const req  = pool.request();
   for (const [k, v] of Object.entries(params))
@@ -615,7 +617,7 @@ async function getGraph(server, app) {
   // Q4 — _-prefixed menu templates with their visible item texts
   const menuTargetRows = menuInvokers.length ? await runQuery(server, `
     SELECT DISTINCT tm.process AS menu_name, tm.text AS item_text
-    FROM ADV.dbo.t_menu tm (NOLOCK)
+    FROM AAD.dbo.t_menu tm (NOLOCK)
     WHERE tm.process LIKE '[_]%' AND tm.text IS NOT NULL AND LEN(TRIM(tm.text)) > 0
     ORDER BY tm.process, tm.text`, {}) : [];
   console.log(`[graph] Q4 menu_items=${menuTargetRows.length} ${Date.now()-t0}ms`);
@@ -718,7 +720,7 @@ app.get('/api/tester/dynamic-menus', async (req, res) => {
     const t0 = Date.now();
     console.log(`[dynmenus] start entry=${entryId} app=${appName}`);
 
-    // Q1 — all _-prefixed menus from t_menu (no app filter — menus are global in the runtime db)
+    // Q1 — all _-prefixed menus from t_menu (AAD token → menuDb per server config)
     const menuRows = await runQuery(server, `
       SELECT DISTINCT
         tm.process   AS dyn_proc,
@@ -727,7 +729,7 @@ app.get('/api/tester/dynamic-menus', async (req, res) => {
         tm.sequence,
         tm.text,
         tm.name      AS target_name
-      FROM ADV.dbo.t_menu tm (NOLOCK)
+      FROM AAD.dbo.t_menu tm (NOLOCK)
       WHERE tm.process LIKE '[_]%'
       ORDER BY tm.process, tm.area_id, tm.sequence`, {});
     console.log(`[dynmenus] Q1 menus=${menuRows.length} ${Date.now()-t0}ms`);
