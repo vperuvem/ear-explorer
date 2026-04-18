@@ -10,17 +10,29 @@
 ## ⚡ Last Session — 2026-04-18
 
 ### Last prompt
+> "cleanup and commit/push"
+
+### What was done
+- Removed temp/diagnostic files from workspace: `_ahead.txt`, `_dirs.txt`, `_log.txt`, `_tester-config.txt`, `logcheck.txt`, `_vtree.ps1`
+- Updated CONTEXT.md with full session history
+- Committed and pushed all pending changes
+
+### Before that
+> "why is the server going down often?"
+
+### What was done — server crash fixes (server.js)
+Three root causes identified and fixed:
+1. **`pool.on('error', ...)`** — `mssql.ConnectionPool` emits `'error'` when SQL Server drops the connection. Without a listener Node crashes instantly (EventEmitter rule). Fix: log + evict stale pool so next request reconnects automatically.
+2. **`process.on('uncaughtException', ...)`** — any unhandled throw killed the process. Fix: log and keep serving.
+3. **`process.on('unhandledRejection', ...)`** — unhandled async rejections crash Node in modern versions. Fix: log and keep serving.
+- Server restarted with fixed code (terminal 43620, still running)
+
+### Before that
 > "copy all entry-point paths is not working some"
 
 ### What was done
 - **Root cause:** `fetchCopyProcessPaths` (right-click menu) strictly filtered `paths.filter(p => p.isRoot)` and returned `∅` when no roots were found — even when valid paths existed. `copyCallerPaths` (📋 button) had the correct fallback logic but the right-click path did not.
 - **Fix:** All three copy functions now use the same logic: prefer root-only paths; fall back to all paths when none are marked `isRoot`. Committed: `a63bd82`
-
-### Before that
-> "is the server not running?"
-
-### What was done
-- Confirmed server IS running — `EADDRINUSE` on second start attempt proved port 9000 already occupied by background node process. No action needed.
 
 ### Before that
 > "use this PAT - [redacted], store it somewhere but don't check it into the repo"
@@ -252,12 +264,13 @@ Every detail panel (Calculate, Compare, Database, Dialog, List, Execute, etc.) n
 ## Git Commit Log (recent — ear-explorer main)
 | Hash | Summary |
 |---|---|
+| *(pending)* | chore: cleanup temp files; update CONTEXT.md |
+| *(pending)* | fix: prevent server crashes -- pool error listener, uncaughtException, unhandledRejection |
+| `a63bd82` | fix: copy paths fallback -- use all paths when no isRoot entries found |
+| `9e5c472` | docs: update CONTEXT.md -- PAT rotation, server check |
+| `b50db61` | docs: update CONTEXT.md -- session context; feat: sort paths, features page |
 | `937b742` | feat: add Features document and link it in the Explorer header |
-| `69405a0` | fix: Set-VirtTermDevice reads IP/port from t_device via /api/vt-devices -- no hardcoded values |
-| `340341c` | fix: _writeAll.js -- logon/logoff tests accept active WMS session; 34/34 green |
-| `3168ccc` | fix: logon test adaptive (session-reconnect + ZONE-prompt); 25/25 passing |
-| `6c00f83` | docs: GetLargeText fix explanation, VirtTerm bug status, SendWait UIPI constraint |
-| `faa2aa4` | fix: VirtTerm.ps1 with GetLargeText (WM_GETTEXT bypasses GetWindowTextLength caption bug) |
+| `69405a0` | fix: Set-VirtTermDevice reads IP/port from t_device via /api/vt-devices |
 
 ## Git Commit Log (recent — ear-tester master)
 | Hash | Summary |
