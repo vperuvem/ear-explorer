@@ -908,7 +908,7 @@ function Set-VirtTermDevice {
     Set-ItemProperty -Path \$devPath -Name 'IP Address' -Value \$ip             -Type String -ErrorAction SilentlyContinue
     Set-ItemProperty -Path \$devPath -Name 'Port'       -Value ([int]\$port)    -Type DWord  -ErrorAction SilentlyContinue
 
-    Write-Host "  VirtTerm device: \$dn  (\$ip:\$port)  [from t_device -- DisplayMenuOptions=1]" -ForegroundColor DarkGray
+    Write-Host "  VirtTerm device: \$dn  (\${ip}:\${port})  [from t_device -- DisplayMenuOptions=1]" -ForegroundColor DarkGray
 }
 
 # Get-VirtTermDevices: queries the EAR API to discover registered VT devices and
@@ -954,10 +954,13 @@ function Get-VirtTermHwnd {
 function Stop-VirtTerm {
     if (\$script:VTProcess -and -not \$script:VTProcess.HasExited) {
         \$script:VTProcess.Kill()
-        Write-Host "  VirtTerm closed." -ForegroundColor Gray
     }
+    # Also kill any stray VirtTerm processes not tracked by \$VTProcess (e.g. from a previous run)
+    Get-Process -Name 'VirtTerm' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
     \$script:VTProcess = \$null
     \$script:VTHwnd    = [IntPtr]::Zero
+    Write-Host "  VirtTerm closed." -ForegroundColor Gray
 }
 
 # -- Screen reading ------------------------------------------------------------
