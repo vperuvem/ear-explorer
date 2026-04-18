@@ -614,12 +614,22 @@ async function getGraph(server, app) {
       AND CAST(dd.statement AS NVARCHAR(MAX)) LIKE '%t_menu%'`, { app });
   console.log(`[graph] Q3 menu_invokers=${menuInvokers.length} ${Date.now()-t0}ms`);
 
-  // Q4 — _-prefixed menu templates with their visible item texts
-  const menuTargetRows = menuInvokers.length ? await runQuery(server, `
-    SELECT DISTINCT tm.process AS menu_name, tm.text AS item_text
-    FROM AAD.dbo.t_menu tm (NOLOCK)
-    WHERE tm.process LIKE '[_]%' AND tm.text IS NOT NULL AND LEN(TRIM(tm.text)) > 0
-    ORDER BY tm.process, tm.text`, {}) : [];
+  // Q4 — _-prefixed menu templates with their visible item texts.
+  // t_menu lives in AAD on Retail (menuDb=AAD) and ADV on WH (menuDb=ADV).
+  // If the table doesn't exist on a given server, skip gracefully rather than
+  // crashing the whole graph build.
+  let menuTargetRows = [];
+  if (menuInvokers.length) {
+    try {
+      menuTargetRows = await runQuery(server, `
+        SELECT DISTINCT tm.process AS menu_name, tm.text AS item_text
+        FROM AAD.dbo.t_menu tm (NOLOCK)
+        WHERE tm.process LIKE '[_]%' AND tm.text IS NOT NULL AND LEN(TRIM(tm.text)) > 0
+        ORDER BY tm.process, tm.text`, {});
+    } catch(e) {
+      console.warn(`[graph] Q4 t_menu not available on ${server} -- skipping dynamic menus (${e.message.split('\n')[0]})`);
+    }
+  }
   console.log(`[graph] Q4 menu_items=${menuTargetRows.length} ${Date.now()-t0}ms`);
 
   // textsByMenu: menu_name → Set of item texts
@@ -720,18 +730,24 @@ app.get('/api/tester/dynamic-menus', async (req, res) => {
     const t0 = Date.now();
     console.log(`[dynmenus] start entry=${entryId} app=${appName}`);
 
-    // Q1 — all _-prefixed menus from t_menu (AAD token → menuDb per server config)
-    const menuRows = await runQuery(server, `
-      SELECT DISTINCT
-        tm.process   AS dyn_proc,
-        tm.area_id,
-        tm.menu_level,
-        tm.sequence,
-        tm.text,
-        tm.name      AS target_name
-      FROM AAD.dbo.t_menu tm (NOLOCK)
-      WHERE tm.process LIKE '[_]%'
-      ORDER BY tm.process, tm.area_id, tm.sequence`, {});
+    // Q1 — all _-prefixed menus from t_menu (AAD token → menuDb per server config).
+    // If t_menu doesn't exist on this server, return empty gracefully.
+    let menuRows = [];
+    try {
+      menuRows = await runQuery(server, `
+        SELECT DISTINCT
+          tm.process   AS dyn_proc,
+          tm.area_id,
+          tm.menu_level,
+          tm.sequence,
+          tm.text,
+          tm.name      AS target_name
+        FROM AAD.dbo.t_menu tm (NOLOCK)
+        WHERE tm.process LIKE '[_]%'
+        ORDER BY tm.process, tm.area_id, tm.sequence`, {});
+    } catch(e) {
+      console.warn(`[dynmenus] t_menu not available on ${server} -- returning empty (${e.message.split('\n')[0]})`);
+    }
     console.log(`[dynmenus] Q1 menus=${menuRows.length} ${Date.now()-t0}ms`);
 
     if (!menuRows.length) {
