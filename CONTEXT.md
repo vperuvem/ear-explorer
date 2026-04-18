@@ -264,8 +264,8 @@ Every detail panel (Calculate, Compare, Database, Dialog, List, Execute, etc.) n
 ## Git Commit Log (recent — ear-explorer main)
 | Hash | Summary |
 |---|---|
-| *(pending)* | chore: cleanup temp files; update CONTEXT.md |
-| *(pending)* | fix: prevent server crashes -- pool error listener, uncaughtException, unhandledRejection |
+| `68b9e49` | chore: cleanup temp files; update CONTEXT.md with full session history |
+| *(prev)* | fix: prevent server crashes -- pool error listener, uncaughtException, unhandledRejection |
 | `a63bd82` | fix: copy paths fallback -- use all paths when no isRoot entries found |
 | `9e5c472` | docs: update CONTEXT.md -- PAT rotation, server check |
 | `b50db61` | docs: update CONTEXT.md -- session context; feat: sort paths, features page |
