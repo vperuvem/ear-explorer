@@ -892,9 +892,10 @@ async function copyCallerPaths(processId, processName, btn) {
     const paths = await res.json();
     if (paths.error) throw new Error(paths.error);
     if (!paths.length) { btn.textContent = '∅'; setTimeout(() => btn.textContent = orig, 1500); return; }
-    // Only copy root-to-process paths, not every intermediate ancestor
+    // Prefer root-only paths; fall back to all paths if none are marked root
     const roots = paths.filter(p => p.isRoot);
-    const text  = (roots.length ? roots : paths).map(p => p.path).sort((a, b) => a.localeCompare(b)).join('\n');
+    const list  = roots.length ? roots : paths;
+    const text  = list.map(p => p.path).sort((a, b) => a.localeCompare(b)).join('\n');
     await writeToClipboard(text);
     btn.textContent = '✓';
   } catch(e) {
@@ -1407,10 +1408,12 @@ async function fetchCopyProcessPaths(procId, procName) {
     const res   = await fetch(`/api/explorer/all-paths?id=${encodeURIComponent(procId)}&app=${encodeURIComponent(app)}&server=${encodeURIComponent(getServer())}`);
     const paths = await res.json();
     if (paths.error) throw new Error(paths.error);
-    const list = paths.filter(p => p.isRoot);
-    if (!list.length) return `∅ No entry-point paths to "${procName}"`;
+    if (!paths.length) return `∅ No entry-point paths to "${procName}"`;
+    // Prefer root-only paths; fall back to all paths if none are marked root
+    const roots = paths.filter(p => p.isRoot);
+    const list  = roots.length ? roots : paths;
     await writeToClipboard(list.map(p => p.path).sort((a, b) => a.localeCompare(b)).join('\n'));
-    return `✓ Copied ${list.length} path${list.length === 1 ? '' : 's'} to ${procName}`;
+    return `✓ Copied ${list.length} path${list.length === 1 ? '' : 's'} to "${procName}"`;
   } catch(e) { return '✗ ' + e.message; }
 }
 
