@@ -38,13 +38,17 @@ async function getPool(serverKey) {
   let lastErr;
   for (const drv of ODBC_DRIVERS) {
     try {
-      // Use ConnectionPool (not mssql.connect) so each server gets its own
-      // independent pool -- mssql.connect() is a global singleton and reuses
-      // the first connection for every subsequent call regardless of server.
       const pool = new mssql.ConnectionPool({
         connectionString: `Driver={${drv}};Server=${cfg.sqlServer};Database=${cfg.earDb};Trusted_Connection=yes;`
       });
       await pool.connect();
+      // If SQL Server drops the connection the pool emits 'error'.
+      // Without a listener Node crashes with "Unhandled 'error' event".
+      // Log it and evict the broken pool so the next request reconnects.
+      pool.on('error', err => {
+        console.error(`[pool:${serverKey}] connection error — evicting pool:`, err.message);
+        delete pools[serverKey];
+      });
       pools[serverKey] = pool;
       console.log(`Connected to ${cfg.sqlServer} (earDb=${cfg.earDb}, advDb=${cfg.advDb}) using driver: ${drv}`);
       return pools[serverKey];
@@ -934,6 +938,16 @@ app.post('/api/launch-virtterm', (_req, res) => {
     console.error('[virtterm] launch failed:', e.message);
     sendErr(res, e);
   }
+});
+
+// ── Crash guards ──────────────────────────────────────────────────────────────
+// Prevent any stray unhandled exception or rejected promise from killing the
+// process. Log it clearly so issues are visible, but keep serving requests.
+process.on('uncaughtException', err => {
+  console.error('[uncaughtException] Server kept alive:', err.message, err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection] Server kept alive:', reason);
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
