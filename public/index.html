@@ -894,7 +894,7 @@ async function copyCallerPaths(processId, processName, btn) {
     if (!paths.length) { btn.textContent = '∅'; setTimeout(() => btn.textContent = orig, 1500); return; }
     // Only copy root-to-process paths, not every intermediate ancestor
     const roots = paths.filter(p => p.isRoot);
-    const text  = (roots.length ? roots : paths).map(p => p.path).join('\n');
+    const text  = (roots.length ? roots : paths).map(p => p.path).sort((a, b) => a.localeCompare(b)).join('\n');
     await writeToClipboard(text);
     btn.textContent = '✓';
   } catch(e) {
@@ -1409,7 +1409,7 @@ async function fetchCopyProcessPaths(procId, procName) {
     if (paths.error) throw new Error(paths.error);
     const list = paths.filter(p => p.isRoot);
     if (!list.length) return `∅ No entry-point paths to "${procName}"`;
-    await writeToClipboard(list.map(p => p.path).join('\n'));
+    await writeToClipboard(list.map(p => p.path).sort((a, b) => a.localeCompare(b)).join('\n'));
     return `✓ Copied ${list.length} path${list.length === 1 ? '' : 's'} to ${procName}`;
   } catch(e) { return '✗ ' + e.message; }
 }
@@ -1422,7 +1422,7 @@ async function fetchCopyActionPaths(type, id, name) {
     const paths = await res.json();
     if (paths.error) throw new Error(paths.error);
     if (!paths.length) return `∅ No entry-point paths to "${name}"`;
-    await writeToClipboard(paths.map(p => p.path).join('\n'));
+    await writeToClipboard(paths.map(p => p.path).sort((a, b) => a.localeCompare(b)).join('\n'));
     return `✓ Copied ${paths.length} path${paths.length === 1 ? '' : 's'} to ${name}`;
   } catch(e) { return '✗ ' + e.message; }
 }

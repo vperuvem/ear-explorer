@@ -3,6 +3,32 @@
 > **Standing rule (set 2026-04-13):**
 > After every user prompt, update this file with new learnings and commit+push to GitHub.
 > This file is the canonical "start-over" document for any new agent session.
+> **Always update the "Last Session" section below** so context survives a UI restart.
+
+---
+
+## ⚡ Last Session — 2026-04-18
+
+### Last prompt
+> "when I click on copy all entry-point paths, sort the paths by ascending order"
+
+### What was done
+- All three clipboard-copy code paths in `public/index.html` now sort paths ascending before writing to clipboard:
+  - `copyCallerPaths` (📋 button on group header)
+  - `fetchCopyProcessPaths` (right-click → 🗺 on process rows)
+  - `fetchCopyActionPaths` (right-click → 🗺 on action rows)
+- Sort is `.sort((a, b) => a.localeCompare(b))` applied to the path strings after filtering for root-only entries.
+- Committed: `7e4d267`
+
+### Earlier this session
+- Created **`public/features.html`** — full features document; `📋 Features` link added to `index.html` header. Commit `937b742`.
+- **PAT** embedded in both repo remote URLs (ear-explorer already had it; ear-tester updated this session). Run `git remote -v` to verify.
+- **`Set-VirtTermDevice` rewritten**: reads `device_name`, `ip_address`, `port` live from `ADV.dbo.t_device` via `/api/vt-devices` — no hardcoded map. Commits `69405a0` / `59a67d6`.
+
+### Next session should
+- Launch VirtTerm manually first, click `WAVTUAT10` to connect, then run `.\Run-Tests.ps1`
+- The connect-test has a 120-second polling window; VirtTerm must be clicked before that expires
+- Verify `Set-VirtTermDevice` correctly picks up IP/port from `t_device` for WA
 
 ---
 
@@ -204,23 +230,22 @@ Every detail panel (Calculate, Compare, Database, Dialog, List, Execute, etc.) n
 ## Git Commit Log (recent — ear-explorer main)
 | Hash | Summary |
 |---|---|
+| `937b742` | feat: add Features document and link it in the Explorer header |
+| `69405a0` | fix: Set-VirtTermDevice reads IP/port from t_device via /api/vt-devices -- no hardcoded values |
 | `340341c` | fix: _writeAll.js -- logon/logoff tests accept active WMS session; 34/34 green |
-| `3168ccc` | fix: logon test adaptive (session-reconnect + ZONE-prompt); 25/25 passing; update CONTEXT.md |
+| `3168ccc` | fix: logon test adaptive (session-reconnect + ZONE-prompt); 25/25 passing |
 | `6c00f83` | docs: GetLargeText fix explanation, VirtTerm bug status, SendWait UIPI constraint |
-| `faa2aa4` | fix: _writeAll.js generates VirtTerm.ps1 with GetLargeText (WM_GETTEXT bypasses GetWindowTextLength caption bug) |
-| `78cb203` | docs: Bug 2 fixed — Get-VirtTermHwnd now uses C# FindWindowByPid |
-| `4a46d59` | docs: test credentials from AAD.dbo.t_employee, schema noted |
+| `faa2aa4` | fix: VirtTerm.ps1 with GetLargeText (WM_GETTEXT bypasses GetWindowTextLength caption bug) |
 
 ## Git Commit Log (recent — ear-tester master)
 | Hash | Summary |
 |---|---|
+| `59a67d6` | fix: Set-VirtTermDevice reads IP/port from t_device via /api/vt-devices -- no hardcoded values |
+| `6c06225` | chore: remove diagnostic temp files from repo |
+| `39d99d6` | fix: VirtTerm launch -- DisplayMenuOptions=1, wait for user to click device, reuse existing session |
 | `3ff8ec1` | fix: 34/34 -- logon/logoff accept active WMS session; logoff PASS with partial-unwind note |
 | `27ffbf2` | fix: adaptive logon test handles session-reconnect and fresh ZONE-prompt states; 25/25 passing |
-| `9ebeaa7` | fix: Get-VirtTermScreen uses GetLargeText (WM_GETTEXT/8192 buffer) — reads real terminal content |
-| `b08a1c6` | feat: Run-Test supports @{ok;detail} return — screen content always shown in report detail column |
-| `f46b183` | feat: always run all tests; report shows biz=all, tech=failures only; auto-save baseline |
-| `60422c8` | fix: Bug 2 — Get-VirtTermHwnd uses C# FindWindowByPid, fixes PS scope bug |
-| `9cd7a29` | fix: replace TESTUSER/TEST with real credentials (000002/00002) from AAD.dbo.t_employee |
+| `9ebeaa7` | fix: Get-VirtTermScreen uses GetLargeText (WM_GETTEXT/8192 buffer) |
 
 ---
 
@@ -417,13 +442,15 @@ Suite: VirtTerm
 - **ZONE prompt** = employee ID login field (no password required for this device type)
 - **Credential:** `000002` → Vogel, Charles H.E., WHSSUPUSER, wh_id=1
 
-### ear-tester GitHub remote
-- `ear-tester` repo has commits locally but **no remote configured**. To push: `git remote add origin <url>; git push -u origin master`
-   - **Credentials source:** `AAD.dbo.t_employee` — columns: `id` (username), `password` (plaintext), `status` (A=Active/T=Terminated), `menu_level`, `emp_number`, `wh_id`
-   - **Test user chosen:** `id=000002` / `password=00002` — Vogel, Charles H.E., status=A, menu_level=WHSSUPUSER, wh_id=1
-   - Credentials updated in `virtterm-tests.ps1` (commit in ear-tester). No longer placeholder values.
-5. **Automated VirtTerm config** — show hidden `#32770` dialog → set ID=1000 (host), ID=1001 (port), ID=1002 (device) → click OK (ID=1) — so tests can connect to any environment without manual setup.
-6. **ear-tester has no GitHub remote** — changes committed locally only. Set up remote with `git remote add origin <url>` if needed.
+### Git remotes (both configured with PAT)
+- **ear-explorer**: `https://<PAT>@github.com/vperuvem/ear-explorer.git`
+- **ear-tester**: `https://<PAT>@github.com/vperuvem/ear-tester.git`
+- PAT is embedded in the remote URL (`git remote -v` to verify). Both push without prompts.
+- To reconfigure: `git remote set-url origin https://<PAT>@github.com/vperuvem/<repo>.git`
+
+### Test credentials
+- **Source:** `AAD.dbo.t_employee`
+- **Test user:** `id=000002` / `password=00002` — Vogel, Charles H.E., status=A, menu_level=WHSSUPUSER, wh_id=1
 
 ### EAR Explorer (nice to have)
 - Paths table: filter option to show only entry-point rows (hide intermediate ancestors)
