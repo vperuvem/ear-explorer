@@ -7,62 +7,50 @@
 
 ---
 
-## ⚡ Last Session — 2026-04-18
+## ⚡ Last Session — 2026-04-19
 
-### Last prompt
-> "cleanup and commit/push"
+### What was done this session
 
-### What was done
-- Removed temp/diagnostic files from workspace: `_ahead.txt`, `_dirs.txt`, `_log.txt`, `_tester-config.txt`, `logcheck.txt`, `_vtree.ps1`
-- Updated CONTEXT.md with full session history
-- Committed and pushed all pending changes
+**1. `Set-VirtTermDevice` rewritten — reads from `t_device` (not hardcoded)**
+- Old code used a hardcoded `$script:VTDeviceMap` hashtable with IP/port typed manually.
+  WA was partially correct; MA and YA were blank `TODO` entries.
+- Fix: removed the hardcoded map. `Set-VirtTermDevice` now calls `Get-VirtTermDevices`
+  (→ `GET /api/vt-devices` → `ADV.dbo.t_device`) and uses:
+  - `$dev.device_name` → `Default Device Name` registry key
+  - `$dev.ip_address`  → `IP Address` sub-key
+  - `$dev.port`        → `Port` sub-key (int from DB, written as DWord — no string issues)
+- Works for WA, MA, YA automatically — no manual entries needed per environment.
+- Commits: ear-explorer `69405a0`, ear-tester `59a67d6`
 
-### Before that
-> "why is the server going down often?"
+**2. `public/features.html` — features document created**
+- Self-contained HTML page matching EAR Explorer purple theme.
+- Covers: Full-Text Search, Process Step Viewer, Caller/Call-Path Tracing,
+  Multi-Server Support, API Reference table.
+- `📋 Features` link added to `index.html` header (right-aligned, before server selector),
+  opens in a new tab. Served by `express.static` — no route change needed.
+- Commit: `937b742`
 
-### What was done — server crash fixes (server.js)
-Three root causes identified and fixed:
-1. **`pool.on('error', ...)`** — `mssql.ConnectionPool` emits `'error'` when SQL Server drops the connection. Without a listener Node crashes instantly (EventEmitter rule). Fix: log + evict stale pool so next request reconnects automatically.
-2. **`process.on('uncaughtException', ...)`** — any unhandled throw killed the process. Fix: log and keep serving.
-3. **`process.on('unhandledRejection', ...)`** — unhandled async rejections crash Node in modern versions. Fix: log and keep serving.
-- Server restarted with fixed code (terminal 43620, still running)
+**3. PAT configured for ear-tester remote**
+- `ear-explorer` already had PAT in remote URL.
+- `ear-tester` was missing it — updated with `git remote set-url origin https://<PAT>@github.com/vperuvem/ear-tester.git`.
+- Both repos now push without credential prompts.
 
-### Before that
-> "copy all entry-point paths is not working some"
-
-### What was done
-- **Root cause:** `fetchCopyProcessPaths` (right-click menu) strictly filtered `paths.filter(p => p.isRoot)` and returned `∅` when no roots were found — even when valid paths existed. `copyCallerPaths` (📋 button) had the correct fallback logic but the right-click path did not.
-- **Fix:** All three copy functions now use the same logic: prefer root-only paths; fall back to all paths when none are marked `isRoot`. Committed: `a63bd82`
-
-### Before that
-> "use this PAT - [redacted], store it somewhere but don't check it into the repo"
-
-- New PAT stored in `.git/config` `url =` for both repos — never tracked, never committed:
-  - `ear-explorer/.git/config` — verified via file read ✅
-  - `ear-tester/.git/config` — verified via copied config ✅
-- Old PAT commits (`2b3292f`, `353acbd`) scrubbed from ear-explorer history via `git reset --soft 73ed970` + recommit as `b50db61`
-- Clean commit pushed; remote confirmed in sync (`origin/main..HEAD` is empty)
-
-### Before that
-> "when I click on copy all entry-point paths, sort the paths by ascending order"
-
-### What was done
-- All three clipboard-copy code paths in `public/index.html` now sort paths ascending before writing to clipboard:
-  - `copyCallerPaths` (📋 button on group header)
-  - `fetchCopyProcessPaths` (right-click → 🗺 on process rows)
-  - `fetchCopyActionPaths` (right-click → 🗺 on action rows)
-- Sort is `.sort((a, b) => a.localeCompare(b))` applied to the path strings after filtering for root-only entries.
-- Committed: `7e4d267`
-
-### Earlier this session
-- Created **`public/features.html`** — full features document; `📋 Features` link added to `index.html` header. Commit `937b742`.
-- **PAT** embedded in both repo remote URLs (ear-explorer already had it; ear-tester updated this session). Run `git remote -v` to verify.
-- **`Set-VirtTermDevice` rewritten**: reads `device_name`, `ip_address`, `port` live from `ADV.dbo.t_device` via `/api/vt-devices` — no hardcoded map. Commits `69405a0` / `59a67d6`.
+**4. VirtTerm test run attempted — not yet completed**
+- VirtTerm requires a physical click on the device name (`WAVTUAT10`) in its blue selection list to establish the TCP connection to WMS. This cannot be automated.
+- Tests launched with a 120-second polling window, but the click did not happen in time.
+- **Next time:** launch VirtTerm manually first → click `WAVTUAT10` → confirm WMS screen appears → then run `.\Run-Tests.ps1`. Tests detect existing connected session and skip the launch wait.
 
 ### Next session should
-- Launch VirtTerm manually first, click `WAVTUAT10` to connect, then run `.\Run-Tests.ps1`
-- The connect-test has a 120-second polling window; VirtTerm must be clicked before that expires
-- Verify `Set-VirtTermDevice` correctly picks up IP/port from `t_device` for WA
+1. Start EAR Explorer server if not running: `cd C:\Users\PVenkatesh\Downloads\ear-explorer; node server.js`
+2. Kill any stale VirtTerm: `Get-Process VirtTerm -EA SilentlyContinue | Stop-Process -Force`
+3. Set registry + launch VirtTerm manually:
+   ```powershell
+   $r = 'HKCU:\Software\HighJump Software\Advantage Virtual Terminal'
+   Set-ItemProperty $r -Name 'DisplayMenuOptions' -Value 1 -Type DWord
+   Start-Process 'C:\Users\PVenkatesh\Downloads\VirtualScanner\x86\VirtTerm.exe'
+   ```
+4. Click `WAVTUAT10` in VirtTerm's blue device list — wait for WMS screen to appear
+5. Run tests: `cd C:\Users\PVenkatesh\Downloads\ear-tester; .\Run-Tests.ps1 -OpenReport`
 
 ---
 
@@ -108,6 +96,7 @@ Three root causes identified and fixed:
 
 **DB servers (all SQL Server, Windows auth, ODBC):**
 - `ArcadiaWHJSqlStage` (default / demo)
+- `ArcadiaWHJSqlQA` (QA environment — added 2026-04-19)
 - `RetailRHjsqldev`
 - `RetailRHjsqlStage`
 
