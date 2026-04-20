@@ -35,9 +35,15 @@ Set-Location '$workingDir'
 while (`$true) {
     `$ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
     Add-Content '$logFile' "`n[`$ts] Starting EAR Explorer (node server.js)..."
-    & '$nodeExe' '$scriptPath' 2>&1 | ForEach-Object { Add-Content '$logFile' `$_ }
+    # Start node as a child process so we can track its PID separately.
+    # This means killing node.exe directly (e.g. to pick up a code change) does NOT
+    # kill this wrapper loop -- the loop will restart node automatically within 5 seconds.
+    `$proc = Start-Process -FilePath '$nodeExe' -ArgumentList '$scriptPath' ``
+                -WorkingDirectory '$workingDir' -NoNewWindow -PassThru ``
+                -RedirectStandardOutput '$logFile' -RedirectStandardError '$logFile'
+    `$proc.WaitForExit()
     `$ts2 = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-    Add-Content '$logFile' "[`$ts2] Process exited -- restarting in 5 seconds..."
+    Add-Content '$logFile' "[`$ts2] node exited (code `$(`$proc.ExitCode)) -- restarting in 5 seconds..."
     Start-Sleep -Seconds 5
 }
 "@

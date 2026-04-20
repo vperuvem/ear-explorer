@@ -19,6 +19,7 @@ const pools       = {};
 // label     : display name shown in the dropdown
 const SERVER_CONFIG = {
   ArcadiaWHJSqlStage: { sqlServer: 'ArcadiaWHJSqlStage', earDb: 'EAR', advDb: 'ADV', menuDb: 'ADV', label: 'ArcadiaWHJSqlStage' },
+  ArcadiaWHJSqlQA:    { sqlServer: 'ArcadiaWHJSqlQA',    earDb: 'EAR', advDb: 'ADV', menuDb: 'ADV', label: 'ArcadiaWHJSqlQA'    },
   RetailRHJSqlUAT:    { sqlServer: 'RetailRHJSqlUAT',    earDb: 'EAR', advDb: 'ADV', menuDb: 'AAD', label: 'RetailRHJSqlUAT'    },
 };
 const ALLOWED_SERVERS = Object.keys(SERVER_CONFIG);
@@ -169,7 +170,11 @@ function buildSearchSql(types) {
   if (types.includes('13')) parts.push(`${S}, '13' AS match_type, d.label AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=13 AND d.commented_out=0 ${W} AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'`);
   if (types.includes('14')) parts.push(`${S}, '14' AS match_type, d.label AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=14 AND d.commented_out=0 ${W} AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'`);
   if (types.includes('16')) parts.push(`${S}, '16' AS match_type, c.name AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=16 AND d.commented_out=0 JOIN t_app_locale c (NOLOCK) ON c.id=d.action_id ${W} AND lower(c.name) LIKE '%'+lower(@proc)+'%'`);
-  if (types.includes('17')) parts.push(`${S}, '17' AS match_type, f.name AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=17 AND d.commented_out=0 JOIN t_app_field f (NOLOCK) ON f.id=d.action_id ${W} AND lower(f.name) LIKE '%'+lower(@proc)+'%'`);
+  // Field scope: match the field name wherever the field appears in any process --
+  // as a direct step (action_type=17), or as an operand/result in Calculate (3),
+  // Compare (4), List (9), or Dialog (6). Previously only direct steps were searched,
+  // which missed fields like "Door Flag CG MFG" that are only used as operands.
+  if (types.includes('17')) parts.push(`${S}, '17' AS match_type, f.name AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.commented_out=0 JOIN t_app_field f (NOLOCK) ON (d.action_type=17 AND d.action_id=f.id) OR (d.action_type=3 AND d.action_id IN (SELECT cd.id FROM t_act_calculate_detail cd (NOLOCK) WHERE (cd.result_type=17 AND cd.result_id=f.id) OR (cd.operand1_type=17 AND cd.operand1_id=f.id) OR (cd.operand2_type=17 AND cd.operand2_id=f.id))) OR (d.action_type=4 AND d.action_id IN (SELECT cmp.id FROM t_act_compare cmp (NOLOCK) WHERE (cmp.operand1_type=17 AND cmp.operand1_id=f.id) OR (cmp.operand2_type=17 AND cmp.operand2_id=f.id))) OR (d.action_type=9 AND d.action_id IN (SELECT l.id FROM t_act_list l (NOLOCK) WHERE (l.operand1_type=17 AND l.operand1_id=f.id) OR (l.operand2_type=17 AND l.operand2_id=f.id))) OR (d.action_type=6 AND d.action_id IN (SELECT dd.id FROM t_act_dialog_detail dd (NOLOCK) WHERE dd.field_type=17 AND dd.field_id=f.id)) ${W} AND lower(f.name) LIKE '%'+lower(@proc)+'%'`);
   if (types.includes('18')) parts.push(`${S}, '18' AS match_type, COALESCE(c.data_string,CAST(c.data_number AS NVARCHAR(50)),CAST(c.data_datetime AS NVARCHAR(50))) AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=18 AND d.commented_out=0 JOIN t_app_constant c (NOLOCK) ON c.id=d.action_id ${W} AND lower(ISNULL(c.data_string,'')) LIKE '%'+lower(@proc)+'%'`);
   if (types.includes('19')) parts.push(`${S}, '19' AS match_type, r.name AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.action_type=19 AND d.commented_out=0 JOIN t_app_record r (NOLOCK) ON r.id=d.action_id ${W} AND lower(r.name) LIKE '%'+lower(@proc)+'%'`);
   if (types.includes('-1')) parts.push(`${S}, '-1' AS match_type, d.label AS action_name ${J} JOIN t_app_process_object_detail d (NOLOCK) ON d.id=m.id AND d.commented_out=1 ${W} AND lower(ISNULL(d.label,'')) LIKE '%'+lower(@proc)+'%'`);
@@ -887,17 +892,74 @@ app.get('/api/tester/dynamic-menus', async (req, res) => {
   } catch(e) { sendErr(res, e); }
 });
 
+// ── Read column names of any ADV table (for schema verification) ─────────────
+app.get('/api/schema', async (req, res) => {
+  const table = req.query.table || '';
+  try {
+    const rows = await runQuery(getServer(req), `
+      SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+      FROM ADV.INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = @table
+      ORDER BY ORDINAL_POSITION`, { table });
+    send(res, rows);
+  } catch(e) { sendErr(res, e); }
+});
+
+// ── VirtTerm parent device lookup (TCP port) ─────────────────────────────────
+app.get('/api/vt-parent', async (req, res) => {
+  const devName = req.query.dev_name || '';
+  try {
+    const rows = await runQuery(getServer(req), `
+      SELECT child.dev_name, child.link_device_id,
+             parent.dev_name AS parent_name, parent.dev_port
+      FROM ADV.dbo.t_device (NOLOCK) child
+      JOIN ADV.dbo.t_device (NOLOCK) parent ON parent.device_id = child.link_device_id
+      WHERE child.dev_name = @devName`, { devName });
+    send(res, rows);
+  } catch(e) { sendErr(res, e); }
+});
+
+// ── VirtTerm host server info from t_server (with resolved IP) ───────────────
+app.get('/api/vt-host', async (req, res) => {
+  const dns = require('dns').promises;
+  try {
+    const rows = await runQuery(getServer(req), `SELECT * FROM ADV.dbo.t_server (NOLOCK)`);
+    const result = await Promise.all(rows.map(async r => {
+      let ip = null;
+      try { const addrs = await dns.lookup(r.network_name); ip = addrs.address; } catch(e) { ip = `DNS_FAIL: ${e.message}`; }
+      return { ...r, ip };
+    }));
+    send(res, result);
+  } catch(e) { sendErr(res, e); }
+});
+
+// ── VirtTerm parent device lookup (for TCP port) ──────────────────────────────
+app.get('/api/vt-parent', async (req, res) => {
+  const devName = req.query.dev_name || '';
+  try {
+    const rows = await runQuery(getServer(req), `
+      SELECT child.dev_name, child.dev_id, child.link_device_id,
+             parent.dev_name AS parent_name, parent.dev_id AS parent_id,
+             parent.dev_port AS parent_port, parent.dev_addr AS parent_addr
+      FROM ADV.dbo.t_device (NOLOCK) child
+      JOIN ADV.dbo.t_device (NOLOCK) parent ON parent.device_id = child.link_device_id
+      WHERE child.dev_name = @devName`, { devName });
+    send(res, rows);
+  } catch(e) { sendErr(res, e); }
+});
+
 // ── VirtTerm device config per app ───────────────────────────────────────────
-// Returns Virtual Terminal devices with their connection details (name, IP, port)
-// so the test framework can configure VirtTerm's registry before launching it.
+// Returns Virtual Terminal devices from t_device so the test framework can
+// configure VirtTerm's registry. Column names use the actual WMS schema fields.
 app.get('/api/vt-devices', async (req, res) => {
   const app = req.query.app || '';
   try {
     const rows = await runQuery(getServer(req), `
       SELECT
-        d.device_name,
-        d.ip_address,
-        d.port,
+        d.dev_name,
+        d.dev_id,
+        d.dev_addr,
+        d.dev_port,
         dt.dev_type,
         a.name AS app_name
       FROM ADV.dbo.t_device       (NOLOCK) d
@@ -907,22 +969,9 @@ app.get('/api/vt-devices', async (req, res) => {
            ON a.application_id = sol.application_id
       WHERE dt.dev_type LIKE '%Virtual%'
         AND (@app = '' OR a.name = @app)
-      ORDER BY a.name, d.device_name`, { app });
+      ORDER BY a.name, d.dev_name`, { app });
     send(res, rows);
-  } catch(e) {
-    // Column names vary across WMS versions -- fall back to broader exploration
-    try {
-      const rows = await runQuery(getServer(req), `
-        SELECT TOP 20 d.*, dt.dev_type, a.name AS app_name
-        FROM ADV.dbo.t_device      (NOLOCK) d
-        JOIN ADV.dbo.t_solution    (NOLOCK) sol ON sol.solution_id   = d.solution_id
-        JOIN ADV.dbo.t_device_type (NOLOCK) dt  ON dt.device_type_id = d.device_type_id
-        JOIN EAR.dbo.t_application_development (NOLOCK) a
-             ON a.application_id = sol.application_id
-        WHERE dt.dev_type LIKE '%Virtual%'`, {});
-      send(res, rows);
-    } catch(e2) { sendErr(res, e2); }
-  }
+  } catch(e) { sendErr(res, e); }
 });
 
 // ── Launch VirtTerm ───────────────────────────────────────────────────────────

@@ -1,0 +1,10 @@
+{
+  "name": "ear-explorer-tests",
+  "version": "1.0.0",
+  "description": "Integration tests for EAR Explorer API — run before every git commit",
+  "private": true,
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "test": "node run-tests.js"
+  }
+}

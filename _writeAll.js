@@ -400,53 +400,31 @@ Run-Test 'EAR' 'Calc action has operator symbol' {
 
 Section "VirtTerm Logon (Business)"
 Run-Test 'VirtTerm-Biz' 'VirtTerm connects to WMS for business tests' {
-    # Strategy:
-    # 1. If VirtTerm is already running with live WMS screen data -> reuse it.
-    # 2. If not running (or stuck at device selection splash) -> launch fresh,
-    #    configure registry for the target app, then wait up to 2 minutes for the
-    #    user to click on the device in the VirtTerm device-selection screen.
-    #    (VirtTerm requires a real hardware click to initiate the WMS connection.)
-    # 3. Once ConsoleEcho contains real WMS data, proceed.
+    # Kill any stale instance, configure registry (DisplayMenuOptions=1 + UAT device),
+    # launch VirtTerm, auto-click the device in the selection list, then wait 30s for
+    # real WMS screen data -- printing the screen every second for visibility.
+    Stop-VirtTerm
+    Start-Sleep -Milliseconds 800
+    Set-VirtTermDevice   # sets UAT device name + DisplayMenuOptions=1
+    Start-VirtTerm -WaitMs 3000
+    if (\$script:VTHwnd -eq [IntPtr]::Zero) { return 'VirtTerm window not found after launch' }
 
-    # -- Step 1: Check existing VirtTerm session ---------------------------------
-    \$existing = Get-Process -Name 'VirtTerm' -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (\$existing) {
-        \$script:VTProcess = \$existing
-        \$script:VTHwnd   = Get-VirtTermHwnd
-        \$s = Get-VirtTermScreen
-        if (\$s -and \$s -ne 'ConsoleEcho') {
-            return @{ ok=\$true; detail="Reused running VirtTerm session. Screen: [\$s]" }
-        }
-        # VirtTerm is running but stuck at device selection (ConsoleEcho == default).
-        # Bring it to the foreground so the user can click the device.
-        [WinApi]::ShowWindow(\$script:VTHwnd, 9) | Out-Null
-        [WinApi]::SetForegroundWindow(\$script:VTHwnd) | Out-Null
-        Write-Host "  VirtTerm running but not connected. Waiting for user to click device..." -ForegroundColor Yellow
-    } else {
-        # -- Step 2: Launch VirtTerm (keep DisplayMenuOptions=1 for device list) ---
-        # Set-VirtTermDevice writes correct IP/Port/DeviceName for the target app.
-        # DisplayMenuOptions=1 shows the device-selection list in VirtTerm's window.
-        # The user must click on the device name once to initiate the WMS connection.
-        Set-VirtTermDevice   # writes correct device registry profile (DisplayMenuOptions=1)
-        Start-VirtTerm -WaitMs 5000
-        if (\$script:VTHwnd -eq [IntPtr]::Zero) { return 'VirtTerm window not found after launch' }
-        Write-Host "  VirtTerm launched. Waiting for user to click device in the selection list..." -ForegroundColor Yellow
-    }
+    # Enumerate child windows and click the UAT device button in the selection list.
+    \$devName = (Get-ItemProperty \$VTRegRoot -ErrorAction SilentlyContinue).'Default Device Name'
+    Write-Host "  Auto-clicking device: \$devName" -ForegroundColor DarkGray
+    Connect-VirtTermDevice -DeviceName \$devName -WaitMs 2000
 
-    # -- Step 3: Poll for WMS screen data (up to 120s) ---------------------------
-    # The user clicks on the device (e.g., WAVTUAT10) in the blue VirtTerm window.
-    # VirtTerm then establishes TCP connection and WMS starts sending screen data.
-    # ConsoleEcho changes from "ConsoleEcho" (VB6 default) to actual WMS content.
+    # Poll up to 30s -- print current screen every second so failures are diagnosable.
     \$ready = \$false
-    for (\$i = 0; \$i -lt 60; \$i++) {
+    for (\$i = 0; \$i -lt 30; \$i++) {
         \$s = Get-VirtTermScreen
+        Write-Host "  [\$(\$i+1)s] Screen: [\$s]" -ForegroundColor DarkGray
         if (\$s -and \$s -ne 'ConsoleEcho') { \$ready = \$true; break }
-        if (\$i % 10 -eq 9) { Write-Host "  Still waiting... (\$(\$i+1)s)" -ForegroundColor DarkGray }
-        Start-Sleep -Milliseconds 2000
+        Start-Sleep -Milliseconds 1000
     }
     \$screen = Get-VirtTermScreen
     if (-not \$ready) {
-        return "WMS screen not received after 120s. Please launch VirtTerm.exe and click on the device (e.g. WAVTUAT10). Screen: [\$screen]"
+        return "WMS not reached after 30s. Screen: [\$screen]"
     }
     @{ ok=\$true; detail="Connected. Screen: [\$screen]" }
 }
@@ -493,10 +471,13 @@ Run-Test 'VirtTerm-Biz' 'Logoff: navigate to a clean menu state' {
 }
 Run-Test 'VirtTerm-Biz' 'Login: confirm starting screen before auth' {
     \$screen = Get-VirtTermScreen
+    Write-Host "  Screen on entry: [\$screen]" -ForegroundColor DarkGray
     # Advance past splash if needed
     if (\$screen -match 'FORKLIFT') {
+        Write-Host "  Pressing Enter to advance past FORKLIFT splash..." -ForegroundColor DarkGray
         Send-VirtTermKey 'Enter'; Start-Sleep -Milliseconds 2000
         \$screen = Get-VirtTermScreen
+        Write-Host "  Screen after Enter: [\$screen]" -ForegroundColor DarkGray
     }
     # ZONE = clean login prompt; CHOICE/OPTION/Vogel = session already active
     \$atZone   = \$screen -cmatch '(?m)^\\s*ZONE\\s*\$'
@@ -507,98 +488,132 @@ Run-Test 'VirtTerm-Biz' 'Login: confirm starting screen before auth' {
 }
 Run-Test 'VirtTerm-Biz' 'Login: employee authenticates or session is active' {
     \$screen = Get-VirtTermScreen
+    Write-Host "  Screen before auth: [\$screen]" -ForegroundColor DarkGray
     # If already showing the employee or at a work menu, authentication already happened.
     if (\$screen -match 'Vogel|CHOICE|OPTION') {
-        return @{ ok=\$true; detail="Session active. Screen: [\$screen]" }
+        return @{ ok=\$true; detail="Session active (already logged in). Screen: [\$screen]" }
     }
-    # On ZONE screen -- send employee ID
+    # On ZONE screen -- send employee ID then wait for next prompt
     if (\$screen -cmatch '(?m)^\\s*ZONE\\s*\$') {
+        Write-Host "  Sending employee ID: 000002" -ForegroundColor DarkGray
         Send-VirtTermText '000002'; Send-VirtTermKey 'Enter'
-        \$found  = Wait-VirtTermScreen -Contains 'Vogel' -TimeoutMs 10000
+        Start-Sleep -Milliseconds 2000
         \$screen = Get-VirtTermScreen
-        if (-not \$found) { return "Employee name not on screen after ID entry. Screen: [\$screen]" }
+        Write-Host "  Screen after employee ID: [\$screen]" -ForegroundColor DarkGray
+        # WMS may ask for a PIN/password -- send '00002' if prompted
+        if (\$screen -match 'PASSWORD|PASSW|PIN|PASS') {
+            Write-Host "  Password prompt detected -- sending PIN: 00002" -ForegroundColor DarkGray
+            Send-VirtTermText '00002'; Send-VirtTermKey 'Enter'
+            Start-Sleep -Milliseconds 2000
+            \$screen = Get-VirtTermScreen
+            Write-Host "  Screen after PIN: [\$screen]" -ForegroundColor DarkGray
+        }
+        if (\$screen -notmatch 'Vogel|CHOICE|OPTION') {
+            return "Not at work menu after login attempt. Screen: [\$screen]"
+        }
+    } else {
+        return "Unexpected screen (not ZONE, not active session). Screen: [\$screen]"
     }
     \$menuType = if (\$screen -match 'CHOICE') { 'CHOICE (fresh zone select)' } else { 'OPTION (work menu)' }
     @{ ok=\$true; detail="Auth OK [\$menuType]. Screen: [\$screen]" }
 }
 Run-Test 'VirtTerm-Biz' 'Login: menu shows numbered entries after auth' {
     \$screen = Get-VirtTermScreen
+    Write-Host "  Screen: [\$screen]" -ForegroundColor DarkGray
     if (\$screen -notmatch '[1-9]') { return "No numbered menu entries visible. Screen: [\$screen]" }
     @{ ok=\$true; detail="Screen: [\$screen]" }
 }
 Run-Test 'VirtTerm-Biz' 'Login: entry 1 reaches OPTION work menu' {
     \$screen = Get-VirtTermScreen
+    Write-Host "  Screen: [\$screen]" -ForegroundColor DarkGray
     if (\$screen -match 'OPTION') {
-        return @{ ok=\$true; detail="Already at OPTION (reconnected). Screen: [\$screen]" }
+        return @{ ok=\$true; detail="Already at OPTION. Screen: [\$screen]" }
     }
+    Write-Host "  Sending: 1 + Enter" -ForegroundColor DarkGray
     Send-VirtTermText '1'; Send-VirtTermKey 'Enter'
     \$found  = Wait-VirtTermScreen -Contains 'OPTION' -TimeoutMs 8000
     \$screen = Get-VirtTermScreen
+    Write-Host "  Screen after selection: [\$screen]" -ForegroundColor DarkGray
     if (-not \$found) { return "No OPTION menu after selection. Screen: [\$screen]" }
     @{ ok=\$true; detail="Screen: [\$screen]" }
 }
 
 Section "VirtTerm Navigation (Business)"
 Run-Test 'VirtTerm-Biz' 'Navigate into option 1 (Billables)' {
+    \$screen = Get-VirtTermScreen
+    Write-Host "  Screen before nav: [\$screen]" -ForegroundColor DarkGray
+    Write-Host "  Sending: 1 + Enter" -ForegroundColor DarkGray
     Send-VirtTermText '1'; Send-VirtTermKey 'Enter'
     Start-Sleep -Milliseconds 1500
     \$screen = Get-VirtTermScreen
+    Write-Host "  Screen after nav: [\$screen]" -ForegroundColor DarkGray
     if ([string]::IsNullOrWhiteSpace(\$screen)) { return 'Screen empty after selecting option 1' }
     @{ ok=\$true; detail="Screen: [\$screen]" }
 }
 Run-Test 'VirtTerm-Biz' 'F3 returns to OPTION menu from Billables' {
+    Write-Host "  Sending: F3" -ForegroundColor DarkGray
     Send-VirtTermKey 'F3'; Start-Sleep -Milliseconds 1000
     \$found  = Wait-VirtTermScreen -Contains 'OPTION' -TimeoutMs 6000
     \$screen = Get-VirtTermScreen
+    Write-Host "  Screen after F3: [\$screen]" -ForegroundColor DarkGray
     if (-not \$found) { return "Not back at OPTION menu after F3. Screen: [\$screen]" }
     @{ ok=\$true; detail="Screen: [\$screen]" }
 }
 Run-Test 'VirtTerm-Biz' 'Navigate into option 2 (Receiving)' {
+    \$screen = Get-VirtTermScreen
+    Write-Host "  Screen before nav: [\$screen]" -ForegroundColor DarkGray
+    Write-Host "  Sending: 2 + Enter" -ForegroundColor DarkGray
     Send-VirtTermText '2'; Send-VirtTermKey 'Enter'
     Start-Sleep -Milliseconds 1500
     \$screen = Get-VirtTermScreen
+    Write-Host "  Screen after nav: [\$screen]" -ForegroundColor DarkGray
     if ([string]::IsNullOrWhiteSpace(\$screen)) { return 'Screen empty after selecting option 2' }
     @{ ok=\$true; detail="Screen: [\$screen]" }
 }
 Run-Test 'VirtTerm-Biz' 'F3 returns to OPTION menu from Receiving' {
+    Write-Host "  Sending: F3" -ForegroundColor DarkGray
     Send-VirtTermKey 'F3'; Start-Sleep -Milliseconds 1000
     \$found  = Wait-VirtTermScreen -Contains 'OPTION' -TimeoutMs 6000
     \$screen = Get-VirtTermScreen
+    Write-Host "  Screen after F3: [\$screen]" -ForegroundColor DarkGray
     if (-not \$found) { return "Not back at OPTION menu after F3. Screen: [\$screen]" }
     @{ ok=\$true; detail="Screen: [\$screen]" }
 }
 
 Section "VirtTerm Barcode (Business)"
 Run-Test 'VirtTerm-Biz' 'Barcode scan: navigate into a scan-field screen' {
-    # Enter the first sub-menu option to reach a screen with an input/scan field.
+    \$screen = Get-VirtTermScreen
+    Write-Host "  Screen before entry: [\$screen]" -ForegroundColor DarkGray
+    Write-Host "  Sending: 1 + Enter" -ForegroundColor DarkGray
     Send-VirtTermText '1'; Send-VirtTermKey 'Enter'
     Start-Sleep -Milliseconds 1500
     \$screen = Get-VirtTermScreen
+    Write-Host "  Screen after entry: [\$screen]" -ForegroundColor DarkGray
     if ([string]::IsNullOrWhiteSpace(\$screen)) { return 'Screen empty after entering sub-option' }
     @{ ok=\$true; detail="Screen: [\$screen]" }
 }
 Run-Test 'VirtTerm-Biz' 'Barcode scan: scan field is present and accepts input focus' {
-    # Confirm an input field (ITEM ID, LOCATION, or similar) is visible.
-    # We do NOT send a real barcode to avoid leaving the session in a deep error state.
     \$screen = Get-VirtTermScreen
+    Write-Host "  Screen: [\$screen]" -ForegroundColor DarkGray
     \$hasField = \$screen -match 'ITEM ID|LOCATION|SCAN|F8:List|OPTION'
     if (-not \$hasField) { return "No recognisable scan/input field on screen. Screen: [\$screen]" }
     @{ ok=\$true; detail="Input field visible. Screen: [\$screen]" }
 }
 Run-Test 'VirtTerm-Biz' 'Barcode scan: F3 returns back from scan screen' {
-    # Navigate back without sending a barcode so session stays at OPTION level.
+    Write-Host "  Sending: F3" -ForegroundColor DarkGray
     Send-VirtTermKey 'F3'; Start-Sleep -Milliseconds 1200
     \$screen = Get-VirtTermScreen
+    Write-Host "  Screen after F3: [\$screen]" -ForegroundColor DarkGray
     @{ ok=\$true; detail="Screen: [\$screen]" }
 }
 
 Section "VirtTerm Fork Workflow (Business)"
 Run-Test 'VirtTerm-Biz' 'Return to OPTION menu before Fork test' {
-    # Ensure we are at the top-level OPTION (work-type) menu.
-    # If inside a sub-menu from the barcode/nav tests, F3 walks back.
     for (\$i = 0; \$i -lt 10; \$i++) {
         \$screen = Get-VirtTermScreen
+        Write-Host "  [\$i] Screen: [\$screen]" -ForegroundColor DarkGray
         if (\$screen -match 'OPTION') { break }
+        Write-Host "  Sending: F3" -ForegroundColor DarkGray
         Send-VirtTermKey 'F3'; Start-Sleep -Milliseconds 1200
     }
     \$screen = Get-VirtTermScreen
@@ -607,30 +622,35 @@ Run-Test 'VirtTerm-Biz' 'Return to OPTION menu before Fork test' {
 }
 Run-Test 'VirtTerm-Biz' 'Select Fork from OPTION menu' {
     \$screen = Get-VirtTermScreen
+    Write-Host "  OPTION menu screen: [\$screen]" -ForegroundColor DarkGray
     if (\$screen -notmatch 'OPTION') { return "Not at OPTION menu. Screen: [\$screen]" }
     # Find the Fork option number dynamically from the screen text.
     # WMS renders the menu as lines like "  3 Fork" or "3 Fork Truck" etc.
     \$forkLine = (\$screen -split "\`n") | Where-Object { \$_ -match '^\\s*\\d+\\s+Fork' } | Select-Object -First 1
     if (-not \$forkLine) { return "Fork option not visible on OPTION screen. Screen: [\$screen]" }
     \$forkNum  = [regex]::Match(\$forkLine, '^\\s*(\\d+)').Groups[1].Value
-    Write-Host "  Fork is option #\$forkNum" -ForegroundColor DarkGray
+    Write-Host "  Fork is option #\$forkNum -- sending \$forkNum + Enter" -ForegroundColor DarkGray
     Send-VirtTermText \$forkNum; Send-VirtTermKey 'Enter'
     Start-Sleep -Milliseconds 2000
     \$screen = Get-VirtTermScreen
+    Write-Host "  Screen after Fork selection: [\$screen]" -ForegroundColor DarkGray
     @{ ok=\$true; detail="Selected Fork (option \$forkNum). Screen: [\$screen]" }
 }
 Run-Test 'VirtTerm-Biz' 'F1 logs out from Fork screen' {
-    # F1 from inside a Fork/work-type screen returns to OPTION.
-    # F1 from OPTION triggers the WMS logoff/sign-off flow (reaches ZONE prompt).
+    \$screen = Get-VirtTermScreen
+    Write-Host "  Screen before F1: [\$screen]" -ForegroundColor DarkGray
+    Write-Host "  Sending: F1" -ForegroundColor DarkGray
     Send-VirtTermKey 'F1'; Start-Sleep -Milliseconds 2000
     \$screen = Get-VirtTermScreen
+    Write-Host "  Screen after first F1: [\$screen]" -ForegroundColor DarkGray
     # If F1 just returned us to OPTION, press F1 once more to sign off.
     if (\$screen -match 'OPTION') {
-        Write-Host "  At OPTION after first F1 -- pressing F1 again to sign off" -ForegroundColor DarkGray
+        Write-Host "  At OPTION -- pressing F1 again to sign off" -ForegroundColor DarkGray
         Send-VirtTermKey 'F1'; Start-Sleep -Milliseconds 2000
         \$screen = Get-VirtTermScreen
+        Write-Host "  Screen after second F1: [\$screen]" -ForegroundColor DarkGray
     }
-    \$loggedOut = \$screen -cmatch '(?m)^\s*ZONE\s*$' -or \$screen -match 'CHOICE'
+    \$loggedOut = \$screen -cmatch '(?m)^\\s*ZONE\\s*\$' -or \$screen -match 'CHOICE'
     if (-not \$loggedOut) { return "Did not reach ZONE/logoff screen after F1. Screen: [\$screen]" }
     @{ ok=\$true; detail="Logged out via F1. Screen: [\$screen]" }
 }
@@ -735,6 +755,8 @@ public class WinApi {
     const uint MOUSEEVENTF_MOVE        = 0x0001;
     const uint MOUSEEVENTF_LEFTDOWN    = 0x0002;
     const uint MOUSEEVENTF_LEFTUP      = 0x0004;
+    const uint MOUSEEVENTF_RIGHTDOWN   = 0x0008;
+    const uint MOUSEEVENTF_RIGHTUP     = 0x0010;
     const uint MOUSEEVENTF_ABSOLUTE    = 0x8000;
 
     // ClickWindowCenter: moves the real mouse cursor to the window's centre and
@@ -800,6 +822,48 @@ public class WinApi {
         var sb = new StringBuilder(256);
         GetClassName(hWnd, sb, 256);
         return sb.ToString();
+    }
+    // RightClickWindowCenter: hardware right-click at the window's centre.
+    public static void RightClickWindowCenter(IntPtr hWnd) {
+        RECT rc;
+        if (!GetWindowRect(hWnd, out rc)) return;
+        int cx = (rc.Left + rc.Right)  / 2;
+        int cy = (rc.Top  + rc.Bottom) / 2;
+        int sw = GetSystemMetrics(0);
+        int sh = GetSystemMetrics(1);
+        int nx = (cx * 65535) / sw;
+        int ny = (cy * 65535) / sh;
+        var inputs = new INPUT[3];
+        inputs[0].type = INPUT_MOUSE;
+        inputs[0].mi   = new MOUSEINPUT { dx=nx, dy=ny, dwFlags=MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE };
+        inputs[1].type = INPUT_MOUSE;
+        inputs[1].mi   = new MOUSEINPUT { dwFlags=MOUSEEVENTF_RIGHTDOWN|MOUSEEVENTF_ABSOLUTE, dx=nx, dy=ny };
+        inputs[2].type = INPUT_MOUSE;
+        inputs[2].mi   = new MOUSEINPUT { dwFlags=MOUSEEVENTF_RIGHTUP|MOUSEEVENTF_ABSOLUTE, dx=nx, dy=ny };
+        SendInput(3, inputs, Marshal.SizeOf(typeof(INPUT)));
+        Sleep(120);
+    }
+    // HardwareClickAt: hardware left-click at a specific screen coordinate.
+    public static void HardwareClickAt(int cx, int cy) {
+        int sw = GetSystemMetrics(0);
+        int sh = GetSystemMetrics(1);
+        int nx = (cx * 65535) / sw;
+        int ny = (cy * 65535) / sh;
+        var inputs = new INPUT[3];
+        inputs[0].type = INPUT_MOUSE;
+        inputs[0].mi   = new MOUSEINPUT { dx=nx, dy=ny, dwFlags=MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE };
+        inputs[1].type = INPUT_MOUSE;
+        inputs[1].mi   = new MOUSEINPUT { dwFlags=MOUSEEVENTF_LEFTDOWN|MOUSEEVENTF_ABSOLUTE, dx=nx, dy=ny };
+        inputs[2].type = INPUT_MOUSE;
+        inputs[2].mi   = new MOUSEINPUT { dwFlags=MOUSEEVENTF_LEFTUP|MOUSEEVENTF_ABSOLUTE, dx=nx, dy=ny };
+        SendInput(3, inputs, Marshal.SizeOf(typeof(INPUT)));
+        Sleep(120);
+    }
+    // AllTopLevel: returns all visible top-level windows.
+    public static List<IntPtr> AllTopLevel() {
+        var list = new List<IntPtr>();
+        EnumWindows((h, _) => { list.Add(h); return true; }, IntPtr.Zero);
+        return list;
     }
     // Enumerate top-level windows in C# (avoids PowerShell script-block scoping issues).
     public static IntPtr FindWindowByPid(int pid) {
@@ -883,32 +947,83 @@ public class WinApi {
 function Set-VirtTermDevice {
     param([string]\$App = \$script:App)
 
-    # Fetch device list from t_device via the EAR API
+    # Fetch device list from t_device via the EAR API.
+    # The actual WMS column is dev_name (not device_name); IP is "[PING]" (broadcast
+    # discovery) so we read the TCP host:port from the registry (saved on last manual
+    # connection). Prefer UAT devices (dev_name contains 'UAT').
     \$devices = Get-VirtTermDevices -App \$App
-    \$dev = \$devices | Select-Object -First 1
+    # Prefer UAT device; fall back to first device in list
+    \$dev = \$devices | Where-Object { \$_.dev_name -match 'UAT' } | Select-Object -First 1
+    if (-not \$dev) { \$dev = \$devices | Select-Object -First 1 }
 
-    if (-not \$dev -or -not \$dev.device_name) {
+    if (-not \$dev -or -not \$dev.dev_name) {
         \$cur = (Get-ItemProperty \$VTRegRoot -ErrorAction SilentlyContinue).'Default Device Name'
         Write-Host "  VirtTerm: no device found in t_device for app '\$App' -- using current: \$cur" -ForegroundColor DarkYellow
+        Set-ItemProperty -Path \$VTRegRoot -Name 'DisplayMenuOptions' -Value 1 -Type DWord -ErrorAction SilentlyContinue
         return
     }
 
-    \$dn   = \$dev.device_name
-    \$ip   = \$dev.ip_address
-    \$port = \$dev.port   # integer straight from the DB -- no manual entry, no typos
+    \$dn = \$dev.dev_name   # field is dev_name in the WMS schema
 
-    # Write active device name + DisplayMenuOptions to the top-level key.
-    # DisplayMenuOptions=1 shows the device-selection list; user clicks once to connect.
+    # Read existing IP and Port from the registry (written by last manual VirtTerm connection).
+    \$regVals = Get-ItemProperty \$VTRegRoot -ErrorAction SilentlyContinue
+    \$ip      = \$regVals.'IP Address'
+    \$port    = \$regVals.'Port'
+
+    # Use DisplayMenuOptions=1 so the device list appears.
+    # Connect-VirtTermDevice will automate clicking the device after launch.
+    Set-ItemProperty -Path \$VTRegRoot -Name 'Default Device Name' -Value \$dn -Type String -ErrorAction SilentlyContinue
     Set-ItemProperty -Path \$VTRegRoot -Name 'DisplayMenuOptions'  -Value 1    -Type DWord  -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path \$VTRegRoot -Name 'Default Device Name' -Value \$dn  -Type String -ErrorAction SilentlyContinue
+    if (\$ip)   { Set-ItemProperty -Path \$VTRegRoot -Name 'IP Address' -Value \$ip    -Type String -ErrorAction SilentlyContinue }
+    if (\$port) { Set-ItemProperty -Path \$VTRegRoot -Name 'Port'       -Value "\$port" -Type String -ErrorAction SilentlyContinue }
 
-    # Create/update the device sub-key with IP and port from t_device.
     \$devPath = Join-Path \$VTRegRoot \$dn
     if (-not (Test-Path \$devPath)) { New-Item -Path \$devPath -Force | Out-Null }
-    Set-ItemProperty -Path \$devPath -Name 'IP Address' -Value \$ip             -Type String -ErrorAction SilentlyContinue
-    Set-ItemProperty -Path \$devPath -Name 'Port'       -Value ([int]\$port)    -Type DWord  -ErrorAction SilentlyContinue
+    if (\$ip)   { Set-ItemProperty -Path \$devPath -Name 'IP Address' -Value \$ip    -Type String -ErrorAction SilentlyContinue }
+    if (\$port) { Set-ItemProperty -Path \$devPath -Name 'Port'       -Value "\$port" -Type String -ErrorAction SilentlyContinue }
 
-    Write-Host "  VirtTerm device: \$dn  (\${ip}:\${port})  [from t_device -- DisplayMenuOptions=1]" -ForegroundColor DarkGray
+    Write-Host "  VirtTerm: device=\$dn  IP=\$ip  Port=\$port  [DisplayMenuOptions=1, will auto-click]" -ForegroundColor DarkGray
+}
+
+# Connect-VirtTermDevice: automates clicking a device in the VirtTerm selection list.
+# Enumerates all descendant windows looking for a Button/Label with matching text,
+# tries a ListBox selection, then falls back to ClickWindowCenter.
+function Connect-VirtTermDevice {
+    param([string]\$DeviceName = 'WAVTUAT10', [int]$WaitMs = 2000)
+    Start-Sleep -Milliseconds \$WaitMs
+    if (\$script:VTHwnd -eq [IntPtr]::Zero) { return \$false }
+    [WinApi]::ShowWindow(\$script:VTHwnd, 9) | Out-Null
+    [WinApi]::SetForegroundWindow(\$script:VTHwnd) | Out-Null
+    Start-Sleep -Milliseconds 300
+
+    \$allWindows = [WinApi]::GetChildWindows(\$script:VTHwnd)
+    Write-Host "  Child windows (\$(\$allWindows.Count) found):" -ForegroundColor DarkGray
+    foreach (\$h in \$allWindows) {
+        \$cls  = [WinApi]::GetClass(\$h)
+        \$txt  = [WinApi]::GetText(\$h)
+        if (\$txt -or \$cls -notin @('','STATIC')) {
+            Write-Host "    cls=[\$cls] text=[\$txt]" -ForegroundColor DarkGray
+        }
+        # Click on an exact text match (Button, Label, or any control)
+        if (\$txt -eq \$DeviceName) {
+            Write-Host "  Clicking control with text '\$DeviceName'" -ForegroundColor Cyan
+            [WinApi]::ClickButton(\$h); Start-Sleep -Milliseconds 500; return \$true
+        }
+        # ListBox: use LB_FINDSTRINGEXACT (0x01A2) + LB_SETCURSEL (0x0186) + click
+        if (\$cls -eq 'ListBox') {
+            Write-Host "  Found ListBox -- searching for '\$DeviceName'" -ForegroundColor DarkGray
+            \$sb  = New-Object System.Text.StringBuilder \$DeviceName
+            \$idx = [WinApi]::SendMessage(\$h, 0x01A2, [IntPtr](-1), \$sb)
+            if ([int]\$idx -ge 0) {
+                [WinApi]::PostMessage(\$h, 0x0186, [IntPtr][int]\$idx, [IntPtr]::Zero) | Out-Null
+                Start-Sleep -Milliseconds 200
+                [WinApi]::ClickWindowCenter(\$h); return \$true
+            }
+        }
+    }
+    Write-Host "  No matching control -- using ClickWindowCenter (fallback)" -ForegroundColor DarkYellow
+    [WinApi]::ClickWindowCenter(\$script:VTHwnd)
+    return \$true
 }
 
 # Get-VirtTermDevices: queries the EAR API to discover registered VT devices and

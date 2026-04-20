@@ -4,7 +4,8 @@
   "description": "HighJump EAR Database Web Explorer",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "cd tests && npm test"
   },
   "dependencies": {
     "express": "^4.18.2",
