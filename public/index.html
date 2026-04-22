@@ -304,8 +304,10 @@
   <div class="ctx-item" id="ctx-copy-path">📋 Copy path to here</div>
   <div class="ctx-sep"  id="ctx-sep"       style="display:none"></div>
   <div class="ctx-item" id="ctx-all-paths"  style="display:none">🗺 Copy all entry-point paths</div>
-  <div class="ctx-sep"  id="ctx-loop-sep"  style="display:none"></div>
-  <div class="ctx-item" id="ctx-copy-loop" style="display:none">🔁 Copy loop path</div>
+  <div class="ctx-sep"  id="ctx-loop-sep"        style="display:none"></div>
+  <div class="ctx-item" id="ctx-copy-loop"        style="display:none">🔁 Copy loop path</div>
+  <div class="ctx-sep"  id="ctx-proc-loop-sep"   style="display:none"></div>
+  <div class="ctx-item" id="ctx-proc-loop-paths" style="display:none">🔁 Copy possible looping paths</div>
 </div>
 
 <!-- Copy toast -->
@@ -581,7 +583,7 @@ function renderProcessList() {
     el.addEventListener('contextmenu', e => {
       e.preventDefault();
       showCtxMenu(e.clientX, e.clientY, p.name,
-        () => fetchCopyProcessPaths(p.id, p.name));
+        () => fetchCopyProcessPaths(p.id, p.name), p.name);
     });
   });
 }
@@ -760,7 +762,7 @@ function renderTable() {
         e.preventDefault();
         e.stopPropagation();
         showCtxMenu(e.clientX, e.clientY, r.process_name,
-          () => fetchCopyProcessPaths(r.process_id, r.process_name));
+          () => fetchCopyProcessPaths(r.process_id, r.process_name), r.process_name);
       });
       tbody.appendChild(th);
     }
@@ -1454,16 +1456,20 @@ document.getElementById('ctx-copy-loop').addEventListener('click', () => {
 // ── Right-click context menu ─────────────────────────────────────────────────
 let _ctxPath     = '';
 let _ctxAllPaths = null; // async fn → string message, or null if not applicable
+let _ctxProcName = null; // process name for loop-path lookup, null for step rows
 
-function showCtxMenu(x, y, path, allPathsFn) {
+function showCtxMenu(x, y, path, allPathsFn, procName) {
   _ctxPath     = path;
   _ctxAllPaths = allPathsFn || null;
-  // Restore process-specific items; hide loop item
-  document.getElementById('ctx-copy-path').style.display = 'flex';
-  document.getElementById('ctx-loop-sep').style.display  = 'none';
-  document.getElementById('ctx-copy-loop').style.display = 'none';
-  document.getElementById('ctx-all-paths').style.display = allPathsFn ? 'flex'  : 'none';
-  document.getElementById('ctx-sep').style.display       = allPathsFn ? 'block' : 'none';
+  _ctxProcName = procName   || null;
+  // Restore process-specific items; hide loop-row item
+  document.getElementById('ctx-copy-path').style.display       = 'flex';
+  document.getElementById('ctx-loop-sep').style.display        = 'none';
+  document.getElementById('ctx-copy-loop').style.display       = 'none';
+  document.getElementById('ctx-all-paths').style.display       = allPathsFn ? 'flex'  : 'none';
+  document.getElementById('ctx-sep').style.display             = allPathsFn ? 'block' : 'none';
+  document.getElementById('ctx-proc-loop-sep').style.display   = procName   ? 'block' : 'none';
+  document.getElementById('ctx-proc-loop-paths').style.display = procName   ? 'flex'  : 'none';
   const menu = document.getElementById('ctx-menu');
   menu.style.display = 'block';
   menu.style.left = x + 'px';
@@ -1543,6 +1549,31 @@ async function fetchCopyActionPaths(type, id, name) {
     return `✓ Copied ${paths.length} path${paths.length === 1 ? '' : 's'} to ${name}`;
   } catch(e) { return '✗ ' + e.message; }
 }
+
+// ── "Copy possible looping paths" handler ────────────────────────────────────
+async function fetchCopyLoopPaths(procName) {
+  const app    = document.getElementById('inp-app').value.trim() || 'WA';
+  const server = getServer();
+  try {
+    const res  = await fetch(`/api/loops?app=${encodeURIComponent(app)}&server=${encodeURIComponent(server)}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    // Filter to loops that contain this process name anywhere in their path
+    const matching = (data.loops || []).filter(lp =>
+      lp.names.some(n => n === procName));
+    if (!matching.length) return `∅ No loops involve "${procName}"`;
+    await writeToClipboard(matching.map(lp => lp.path).join('\n'));
+    return `✓ Copied ${matching.length} loop${matching.length === 1 ? '' : 's'} involving "${procName}"`;
+  } catch(e) { return '✗ ' + e.message; }
+}
+
+document.getElementById('ctx-proc-loop-paths').addEventListener('click', async () => {
+  hideCtxMenu();
+  if (!_ctxProcName) return;
+  showToast('⏳ Scanning loops…', 30000);
+  const msg = await fetchCopyLoopPaths(_ctxProcName);
+  showToast(msg, 2500);
+});
 
 // Hide menu on any click or right-click outside it
 document.addEventListener('click', e => {
