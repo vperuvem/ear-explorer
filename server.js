@@ -399,6 +399,120 @@ app.get('/api/action-paths', async (req, res) => {
   } catch(e) { sendErr(res, e); }
 });
 
+// ── Infinite loop detector ────────────────────────────────────────────────────
+// Finds all cycles in the process-to-process call graph.
+// Uses iterative Tarjan's SCC to find strongly-connected components, then
+// Johnson's DFS within each SCC to enumerate concrete cycle paths.
+// Each result: { path, names[], ids[], length }
+app.get('/api/loops', async (req, res) => {
+  try {
+    const server = getServer(req);
+    const app    = req.query.app || 'WA';
+    const { adjacency, nameOf } = await getGraph(server, app);
+
+    // Only process→process edges (skip virtual MENU: nodes)
+    const procAdj = new Map();
+    for (const [id, children] of adjacency) {
+      if (id.startsWith('MENU:')) continue;
+      const filtered = children.filter(c => !c.childId.startsWith('MENU:'));
+      if (filtered.length) procAdj.set(id, filtered);
+    }
+
+    // ── Iterative Tarjan's SCC ──────────────────────────────────────────────
+    const indexMap = new Map(), lowlink = new Map(), onStack = new Set();
+    const stack = [], sccs = [];
+    let idx = 0;
+
+    for (const startNode of procAdj.keys()) {
+      if (indexMap.has(startNode)) continue;
+      const callStack = [{ node: startNode, ci: 0,
+        kids: (procAdj.get(startNode) || []).map(e => e.childId) }];
+      indexMap.set(startNode, idx); lowlink.set(startNode, idx++);
+      onStack.add(startNode); stack.push(startNode);
+
+      while (callStack.length) {
+        const frame = callStack[callStack.length - 1];
+        if (frame.ci < frame.kids.length) {
+          const child = frame.kids[frame.ci++];
+          if (!indexMap.has(child)) {
+            indexMap.set(child, idx); lowlink.set(child, idx++);
+            onStack.add(child); stack.push(child);
+            callStack.push({ node: child, ci: 0,
+              kids: (procAdj.get(child) || []).map(e => e.childId) });
+          } else if (onStack.has(child)) {
+            lowlink.set(frame.node, Math.min(lowlink.get(frame.node), indexMap.get(child)));
+          }
+        } else {
+          callStack.pop();
+          if (callStack.length) {
+            const par = callStack[callStack.length - 1].node;
+            lowlink.set(par, Math.min(lowlink.get(par), lowlink.get(frame.node)));
+          }
+          if (lowlink.get(frame.node) === indexMap.get(frame.node)) {
+            const scc = [];
+            let w;
+            do { w = stack.pop(); onStack.delete(w); scc.push(w); } while (w !== frame.node);
+            if (scc.length > 1) {
+              sccs.push(scc);
+            } else {
+              const v = scc[0];
+              if ((procAdj.get(v) || []).some(e => e.childId === v)) sccs.push(scc);
+            }
+          }
+        }
+      }
+    }
+
+    // ── Find concrete cycle paths within each SCC (Johnson's algorithm) ─────
+    const allLoops = [];
+    const MAX_PER_SCC = 25;
+
+    for (const scc of sccs) {
+      // Self-loop
+      if (scc.length === 1) {
+        const v = scc[0], name = nameOf.get(v) || v;
+        allLoops.push({ path: `${name} → ${name}`, names: [name, name], ids: [v, v], length: 1 });
+        continue;
+      }
+
+      const sccSet = new Set(scc);
+      const seenKey = new Set();
+      let found = 0;
+
+      for (const start of [...scc].sort()) {
+        if (found >= MAX_PER_SCC) break;
+        const path = [start], pathSet = new Set([start]);
+
+        const dfs = node => {
+          if (found >= MAX_PER_SCC) return;
+          for (const { childId } of (procAdj.get(node) || [])) {
+            if (!sccSet.has(childId)) continue;
+            if (childId === start && path.length > 1) {
+              const key = [...path].sort().join('\x00');
+              if (!seenKey.has(key)) {
+                seenKey.add(key);
+                const ids   = [...path, start];
+                const names = ids.map(id => nameOf.get(id) || id);
+                allLoops.push({ path: names.join(' → '), names, ids, length: path.length });
+                found++;
+              }
+              continue;
+            }
+            if (pathSet.has(childId) || childId < start) continue;
+            path.push(childId); pathSet.add(childId);
+            dfs(childId);
+            path.pop(); pathSet.delete(childId);
+          }
+        };
+        dfs(start);
+      }
+    }
+
+    allLoops.sort((a, b) => a.length - b.length || a.names[0].localeCompare(b.names[0]));
+    send(res, { count: allLoops.length, loops: allLoops });
+  } catch(e) { sendErr(res, e); }
+});
+
 app.get('/api/compare-action/:id', async (req, res) => {
   try {
     const rows = await runQuery(getServer(req), `

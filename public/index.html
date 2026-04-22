@@ -193,6 +193,25 @@
                 font-size:0.82rem; font-weight:600; pointer-events:none;
                 opacity:0; transition:opacity 0.2s, transform 0.2s; z-index:10000; }
   #copy-toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+
+  /* ── Infinite loop detector panel ───────────────────────────────────────── */
+  #loops-panel { display:none; padding:16px 24px; }
+  .loop-item { display:flex; align-items:center; gap:10px; padding:9px 14px;
+               background:#fff; border:none; border-left:4px solid #dc2626;
+               border-radius:8px; margin-bottom:6px; cursor:default;
+               box-shadow:0 2px 8px rgba(220,38,38,0.09);
+               transition:box-shadow 0.15s; }
+  .loop-item:hover { box-shadow:0 4px 16px rgba(220,38,38,0.20); }
+  .loop-badge { flex-shrink:0; background:#fef2f2; color:#991b1b; font-size:0.7rem;
+                font-weight:700; padding:2px 8px; border-radius:10px; white-space:nowrap; }
+  .loop-path  { flex:1; font-size:0.86rem; color:#1e293b; font-family:'Courier New',monospace;
+                overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .loop-node  { color:#7c3aed; font-weight:700; cursor:pointer;
+                text-decoration:underline dotted #a78bfa; }
+  .loop-node:hover { text-decoration-style:solid; background:rgba(124,58,237,0.08);
+                     border-radius:3px; }
+  .loop-arr   { color:#6b7280; margin:0 3px; user-select:none; }
+  .loop-tail  { color:#991b1b; font-weight:700; font-style:italic; }
 </style>
 </head>
 <body>
@@ -227,6 +246,9 @@
   </div>
   <button onclick="loadData()">🔍 Search</button>
   <button id="btn-back" onclick="goBack()">← Back</button>
+  <button id="btn-loops" onclick="loadLoops()"
+          style="background:#fef3c7;color:#92400e;border:1.5px solid #fcd34d;font-weight:700;"
+          title="Scan for infinite loops in the call graph">🔁 Loops</button>
 
   <a href="/features.html" target="_blank"
      style="margin-left:auto; font-size:0.82rem; font-weight:600; color:#7c3aed; text-decoration:none;
@@ -252,6 +274,8 @@
 </div>
 
 <div class="proc-list" id="proc-list-view" style="display:none"></div>
+
+<div id="loops-panel"></div>
 
 <div class="grid-wrap" id="grid-view">
   <table id="grid">
@@ -280,6 +304,8 @@
   <div class="ctx-item" id="ctx-copy-path">📋 Copy path to here</div>
   <div class="ctx-sep"  id="ctx-sep"       style="display:none"></div>
   <div class="ctx-item" id="ctx-all-paths"  style="display:none">🗺 Copy all entry-point paths</div>
+  <div class="ctx-sep"  id="ctx-loop-sep"  style="display:none"></div>
+  <div class="ctx-item" id="ctx-copy-loop" style="display:none">🔁 Copy loop path</div>
 </div>
 
 <!-- Copy toast -->
@@ -1341,6 +1367,90 @@ function closeDetail() {
 
 document.getElementById('inp-process').addEventListener('keydown', e => { if(e.key==='Enter') loadData(); });
 
+// ── Infinite loop detector ────────────────────────────────────────────────────
+let _ctxLoopPath = null;
+
+async function loadLoops() {
+  const app    = document.getElementById('inp-app').value.trim() || 'WA';
+  const server = getServer();
+  const btn    = document.getElementById('btn-loops');
+  btn.disabled = true; btn.textContent = '⏳ Scanning…';
+
+  // Hide other views, show loops panel
+  document.getElementById('proc-list-view').style.display = 'none';
+  document.getElementById('grid-view').style.display      = 'none';
+  closeDetail();
+  const panel = document.getElementById('loops-panel');
+  panel.style.display = 'block';
+  panel.innerHTML = '<p style="color:#8892a4;padding:8px 0">Scanning call graph for cycles…</p>';
+
+  try {
+    const res  = await fetch(`/api/loops?app=${encodeURIComponent(app)}&server=${encodeURIComponent(server)}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    renderLoops(data.loops || []);
+    btn.textContent = `🔁 Loops (${(data.loops || []).length})`;
+  } catch(e) {
+    panel.innerHTML = `<p style="color:#ef4444;padding:8px 0">⚠️ ${esc(e.message)}</p>`;
+    btn.textContent = '🔁 Loops';
+  } finally { btn.disabled = false; }
+}
+
+function renderLoops(loops) {
+  const panel = document.getElementById('loops-panel');
+  if (!loops.length) {
+    panel.innerHTML = '<p style="color:#059669;padding:8px 0;font-weight:600">✅ No infinite loops detected in the call graph.</p>';
+    return;
+  }
+  const header = `<div style="margin-bottom:12px;font-size:0.92rem;color:#92400e;font-weight:600">
+    ⚠️ ${loops.length} infinite loop${loops.length===1?'':'s'} detected — right-click any row to copy the path</div>`;
+
+  const rows = loops.map(lp => {
+    const nodeHtml = lp.ids.map((id, j) => {
+      const name = esc(lp.names[j]);
+      const isLast = j === lp.ids.length - 1;
+      const arrow  = j > 0 ? '<span class="loop-arr">→</span>' : '';
+      if (isLast) return `${arrow}<span class="loop-tail">${name}</span>`;
+      return `${arrow}<span class="loop-node" onclick="openProcess('${id}','${lp.names[j]}',true)">${name}</span>`;
+    }).join('');
+
+    const badge = lp.length === 1 ? 'self-loop' : lp.length + '-hop loop';
+    return `<div class="loop-item" oncontextmenu="showLoopCtx(event,${JSON.stringify(lp.path)})">
+      <span class="loop-badge">${badge}</span>
+      <span class="loop-path">${nodeHtml}</span>
+    </div>`;
+  }).join('');
+
+  panel.innerHTML = header + rows;
+}
+
+function showLoopCtx(e, path) {
+  e.preventDefault();
+  _ctxLoopPath = path;
+  // Show only the loop item; hide process-specific items
+  document.getElementById('ctx-copy-path').style.display = 'none';
+  document.getElementById('ctx-all-paths').style.display = 'none';
+  document.getElementById('ctx-sep').style.display       = 'none';
+  document.getElementById('ctx-loop-sep').style.display  = 'block';
+  document.getElementById('ctx-copy-loop').style.display = 'flex';
+  const menu = document.getElementById('ctx-menu');
+  menu.style.display = 'block';
+  menu.style.left = e.clientX + 'px';
+  menu.style.top  = e.clientY + 'px';
+  requestAnimationFrame(() => {
+    const r = menu.getBoundingClientRect();
+    if (r.right  > window.innerWidth)  menu.style.left = (e.clientX - r.width)  + 'px';
+    if (r.bottom > window.innerHeight) menu.style.top  = (e.clientY - r.height) + 'px';
+  });
+}
+
+document.getElementById('ctx-copy-loop').addEventListener('click', () => {
+  hideCtxMenu();
+  writeToClipboard(_ctxLoopPath)
+    .then(() => showToast('✓ Loop path copied'))
+    .catch(() => showToast('✗ Copy failed'));
+});
+
 // ── Right-click context menu ─────────────────────────────────────────────────
 let _ctxPath     = '';
 let _ctxAllPaths = null; // async fn → string message, or null if not applicable
@@ -1348,6 +1458,10 @@ let _ctxAllPaths = null; // async fn → string message, or null if not applicab
 function showCtxMenu(x, y, path, allPathsFn) {
   _ctxPath     = path;
   _ctxAllPaths = allPathsFn || null;
+  // Restore process-specific items; hide loop item
+  document.getElementById('ctx-copy-path').style.display = 'flex';
+  document.getElementById('ctx-loop-sep').style.display  = 'none';
+  document.getElementById('ctx-copy-loop').style.display = 'none';
   document.getElementById('ctx-all-paths').style.display = allPathsFn ? 'flex'  : 'none';
   document.getElementById('ctx-sep').style.display       = allPathsFn ? 'block' : 'none';
   const menu = document.getElementById('ctx-menu');
@@ -1438,7 +1552,8 @@ document.addEventListener('contextmenu', e => {
   if (!e.target.closest('#ctx-menu')
     && !e.target.closest('#tbody')
     && !e.target.closest('.group-header')
-    && !e.target.closest('.proc-list-view')) hideCtxMenu();
+    && !e.target.closest('.proc-list-view')
+    && !e.target.closest('#loops-panel')) hideCtxMenu();
 });
 
 // On first load: show server banner + T_DEVICE processes
